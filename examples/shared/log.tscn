@@ -1,0 +1,32 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://addons/flowing_water/nodes/water_floater.gd" id="1_4487o"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_0mk5h"]
+size = Vector3(0.2, 0.2, 1.1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_plr3w"]
+albedo_color = Color(0.36, 0.25, 0.15, 1)
+roughness = 0.9
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_5a4jj"]
+material = SubResource("StandardMaterial3D_plr3w")
+top_radius = 0.095
+bottom_radius = 0.11
+height = 1.1
+radial_segments = 12
+
+[node name="Log" type="RigidBody3D" unique_id=924956519]
+collision_layer = 2
+collision_mask = 3
+mass = 9.0
+
+[node name="Shape" type="CollisionShape3D" parent="." unique_id=41953467]
+shape = SubResource("BoxShape3D_0mk5h")
+
+[node name="Mesh" type="MeshInstance3D" parent="." unique_id=118955407]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, -1, 0, 1, -4.371139e-08, 0, 0, 0)
+mesh = SubResource("CylinderMesh_5a4jj")
+
+[node name="WaterFloater" type="Node3D" parent="." unique_id=1019196626]
+script = ExtResource("1_4487o")

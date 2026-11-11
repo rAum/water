@@ -1,0 +1,30 @@
+[gd_resource type="Resource" script_class="WaterStyle" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/flowing_water/styles/water_style.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+shader_variant = 0
+absorption = Color(0.45, 0.25, 0.6, 1)
+scatter_color = Color(0.035, 0.055, 0.02, 1)
+clarity = 0.45
+turbidity = 0.4
+sediment_color = Color(0.2, 0.2, 0.1, 1)
+turbidity_variation = 0.5
+caustics_strength = 0.15
+caustics_size = 1.8
+detail_at_rest = 0.16
+detail_at_speed = 0.5
+standing_wave_height = 0.03
+surface_slicks = 0.75
+refraction_strength = 0.7
+foam_color = Color(0.82, 0.84, 0.76, 1)
+foam_amount = 0.35
+foam_softness = 0.2
+foam_tile_size = 2.6
+roughness = 0.05
+specular = 0.5
+color_bands = 0
+hard_foam_edge = false
+shoreline_width = 0.0
+sharp_highlights = false

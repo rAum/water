@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://addons/flowing_water/render/rock_receiver.gdshader" id="1_pti5q"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_pti5q")
+shader_parameter/rock_dark = Color(0.15, 0.15, 0.16, 1)
+shader_parameter/rock_light = Color(0.47, 0.45, 0.42, 1)
+shader_parameter/moss_color = Color(0.13, 0.2, 0.06, 1)
+shader_parameter/moss_amount = 0.6
+shader_parameter/base_roughness = 0.82
+shader_parameter/material_caustics = false
