@@ -94,9 +94,10 @@ func _run(shots: Array, wait: float, debug: int, style: String) -> void:
 		tries += 1
 		await get_tree().process_frame
 	for h in _hide:
-		var hn := scene.get_node_or_null(h) as Node3D
-		if hn != null:
-			hn.visible = false
+		# (any node with a visible flag: 3D nodes, the example UI layer)
+		var hn := scene.get_node_or_null(h)
+		if hn != null and "visible" in hn:
+			hn.set("visible", false)
 	if _quality >= 0:
 		get_tree().root.get_node("WaterManager").quality = _quality
 	if _storm >= 0.0:
