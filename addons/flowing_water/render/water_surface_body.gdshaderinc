@@ -21,6 +21,8 @@
 //   COLOR.r = junction fade (1 = solid), COLOR.g = blend-lift mask,
 //   COLOR.b = waterfall progress (0 lip .. 1 foot),
 //   COLOR.a = 1 on the upper surface, 0 on the lower surface of a fall
+//   CUSTOM0 = falls only: (seconds since the lip, speed m/s, metres fallen,
+//             plunge: 1 where the fall lands, fading downstream)
 
 #include "water_common.gdshaderinc"
 
@@ -173,6 +175,8 @@ void vertex() {
 	v_fade = COLOR.r;
 	v_fall_t = COLOR.b;
 	v_shell = COLOR.a;
+	v_flight = CUSTOM0.xyz;
+	v_plunge = CUSTOM0.w;
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_tan = normalize((MODEL_MATRIX * vec4(TANGENT, 0.0)).xyz);
 	v_norm0 = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -222,9 +226,14 @@ void vertex() {
 	// a falling sheet is never still: it billows, more the further it has
 	// fallen, and its two surfaces move independently so its thickness varies
 	if (COLOR.b > 0.001) {
-		float ft_v = COLOR.b * 0.9 - TIME * 0.55;
-		float wob = textureLod(fall_tex, vec2(UV2.x * 0.21 + (1.0 - COLOR.a) * 0.41, ft_v * 0.45), 0.0).g - 0.5;
+		float ft_v = (CUSTOM0.x - TIME) * FALL_TEX_RATE;
+		float wob = textureLod(fall_tex, vec2(UV2.x * 0.21 + (1.0 - COLOR.a) * 0.41, ft_v * 0.3), 0.0).g - 0.5;
 		lift += wob * 0.2 * pow(COLOR.b, 1.3);
+	}
+	// the pool heaves where a fall lands in it
+	if (CUSTOM0.w > 0.001 && COLOR.b < 0.001) {
+		float hv = textureLod(fall_tex, UV2 * vec2(0.23, 0.19) + vec2(0.0, -TIME * 0.13), 0.0).g - 0.5;
+		lift += hv * 0.08 * CUSTOM0.w;
 	}
 	// world-space displacement back to object space: water nodes are rigid
 	// (never non-uniformly scaled), so the inverse rotation is the transpose
@@ -335,6 +344,14 @@ void fragment() {
 	cover *= mix(1.0, 0.12, tongue);
 	// and no bubbles in it yet: the glassy tongue is see-through
 	aer *= 1.0 - 0.85 * tongue;
+	// Plunge pool: where a fall lands the water is beaten into a boiling
+	// mat of white that breaks into lace as it drifts away - the bake's
+	// foam only starts downstream, but the churn is right under the sheet.
+	if (v_plunge > 0.001) {
+		float boil_n = texture(fall_tex, v_metric * vec2(0.31, 0.27) + vec2(0.0, -TIME * 0.17)).g;
+		cover = max(cover, clamp(v_plunge * (0.75 + 0.6 * boil_n), 0.0, 1.0));
+		aer = max(aer, v_plunge);
+	}
 	float foam = smoothstep(1.0 - cover - s_foam_soft, 1.0 - cover + s_foam_soft, pattern)
 		* step(0.001, cover);
 	// no painted line along the banks: foam needs a little water under it
@@ -670,9 +687,17 @@ void fragment() {
 		float fall_dens = 1.0;
 		float lower = 1.0 - v_shell;
 		if (fall_amt > 0.001) {
-			// the lower surface runs slightly behind the upper one: parallax
-			float ft = v_fall_t * 0.9 - TIME * (0.55 - 0.07 * lower);
-			vec2 fuv = vec2(v_metric.x * 0.29 + lower * 0.43, ft * 0.6);
+			// The texture rides with the water: its coordinate down the fall
+			// is the moment the water left the lip (time of flight minus
+			// now), so a feature keeps its place in the water and is
+			// stretched as the water accelerates - slow and compact at the
+			// lip, long fast streaks lower down.
+			// (the lower surface runs slightly behind the upper one: parallax)
+			float ft = (v_flight.x - TIME * (1.0 - 0.08 * lower)) * FALL_TEX_RATE;
+			// columns wander apart as they fall (more the longer they fly)
+			float drift = texture(fall_tex, vec2(v_metric.x * 0.07 + 0.31, ft * 0.21)).g - 0.5;
+			float wander = drift * 1.1 * v_flight.x * v_flight.x;
+			vec2 fuv = vec2((v_metric.x + wander) * 0.29 + lower * 0.43, ft);
 			vec4 f1 = texture(fall_tex, fuv);
 			vec4 f2 = texture(fall_tex, fuv * vec2(2.3, 1.7) + vec2(0.37, 0.21));
 			// strands inside surges
@@ -697,12 +722,43 @@ void fragment() {
 			// (a rock parts the sheet below it; on the brink itself the water
 			// still closes round the rock, so the gap opens on the way down)
 			fall_cover *= 1.0 - 0.96 * smoothstep(0.05, 0.4, ax.b) * smoothstep(0.08, 0.4, v_fall_t);
-			// its foot melts into the churned water of the pool
-			fall_cover *= 1.0 - 0.75 * smoothstep(0.93, 1.0, v_fall_t);
 			// unbroken and clear at the lip, aerated white after a short fall
 			// (thin water between the strands stays translucent: you see the
 			// rock through it)
 			fall_white = smoothstep(0.0, 0.32, v_fall_t) * smoothstep(0.22, 0.72, fall_dens);
+			// Its foot is not a sheet any more: where it hits the pool the
+			// water explodes into a boiling wall of white that hides the
+			// line where the sheet meets the surface. The boil's top edge is
+			// ragged and heaves (clumps rising and falling on their own
+			// clock, not riding down with the water).
+			// (metres above the pool: fallen = drop * progress^2)
+			float above = v_flight.z * (1.0 / max(v_fall_t * v_fall_t, 0.01) - 1.0);
+			vec4 fb1 = texture(fall_tex, vec2(v_metric.x * 0.23 + 0.13, above * 0.21 + TIME * 0.09));
+			vec4 fb2 = texture(fall_tex, vec2(v_metric.x * 0.53 + 0.57, above * 0.47 + TIME * 0.23));
+			float heave = (fb1.g - 0.5) * 0.5 + (fb2.g - 0.5) * 0.3;
+			// (v_plunge: the strip where the sheet's foot meets the pool,
+			// whose fall progress blends back to 0, is all boil)
+			float boil = max((1.0 - smoothstep(0.2, 0.75, above + heave)) * smoothstep(0.5, 0.8, v_fall_t) * fall_amt,
+				smoothstep(0.3, 0.8, v_plunge));
+			float boil_d = clamp(fb1.g * 0.5 + fb2.b * 0.5 + 0.2, 0.0, 1.0);
+			fall_cover = mix(fall_cover, smoothstep(0.15, 0.45, boil_d), boil);
+			fall_white = mix(fall_white, smoothstep(0.1, 0.6, boil_d), boil);
+			fall_dens = mix(fall_dens, boil_d, boil);
+			// A body in the fall: the water it catches does not fall on, so
+			// a gap opens below it and travels down with the water; its
+			// rim is torn white where the sheet splits around the body.
+			if (fall_hit_on > 0.5 && v_flight.x > 0.0 && v_metric.y > fall_hit_s.x && v_metric.y < fall_hit_s.y) {
+				float hr = fall_hit_head + v_flight.x / fall_hit_dt;
+				if (hr - fall_hit_head < fall_hit_rows - 2.0) {
+					float hit = texture(fall_hit_tex, vec2(UV.x, (hr + 0.5) / fall_hit_rows)).r;
+					// ragged: the gap's edge is the sheet's own strands
+					float torn = smoothstep(0.2, 0.8, hit + (fall_dens - 0.5) * 0.8);
+					float rim = clamp(hit * (1.0 - hit) * 4.0, 0.0, 1.0) * smoothstep(0.25, 0.65, fall_dens + 0.15);
+					fall_cover *= 1.0 - torn;
+					fall_white = max(fall_white, rim * 0.9);
+					fall_dens = max(fall_dens, rim);
+				}
+			}
 			// a little relief across the fall, for the light to catch
 			sl.x += (f1.r - 0.5) * 1.5 * fall_amt;
 			n_world = normalize(v_norm0 - v_side * sl.x - v_tan * sl.y);

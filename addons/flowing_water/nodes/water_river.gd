@@ -20,6 +20,8 @@ const STEEP_SLOPE := 0.15
 const MESH_STEP_FLAT := 0.5
 const MESH_STEP_STEEP := 0.25
 const MESH_STEP_FALL := 0.1
+## Metres over which the churn of a plunge pool fades downstream.
+const PLUNGE_REACH := 1.6
 ## Metres from a pond junction within which the ribbon is checked against
 ## the pond (cross-fade and lift).
 const JUNCTION_REACH := 14.0
@@ -121,6 +123,7 @@ func _process(delta: float) -> void:
 	_update_lod()
 	if not Engine.is_editor_hint():
 		_plunge_ripples(delta)
+		_update_fall_hits(delta)
 	if Engine.is_editor_hint():
 		_hash_check_accum += delta
 		if _hash_check_accum > 2.0:
@@ -254,10 +257,14 @@ func frame_at(s: float) -> Dictionary:
 # cached waterfall sections: [s_lip, s_foot, y_lip, y_foot, lip_xz, horizontal_run]
 var _falls: Array = []
 var _falls_valid := false
+# per fall: centre line of the sheet, top to bottom, as
+# [pos (local), dir, side, half width incl. margin] every FALL_LINE_STEP
+var _fall_lines: Array = []
 
 
 func _update_falls() -> void:
 	_falls.clear()
+	_fall_lines.clear()
 	_falls_valid = true
 	if curve == null or curve.get_baked_length() < 1.0:
 		return
@@ -437,6 +444,12 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 	var uv := PackedVector2Array()
 	var uv2 := PackedVector2Array()
 	var col := PackedColorArray()
+	# CUSTOM0: (seconds since the water left the lip, its speed in m/s,
+	# metres fallen, plunge) - the shader scrolls the falling water's texture
+	# on time of flight, so it stretches as the water accelerates; plunge
+	# (1 where a fall lands, fading downstream) churns the pool under it
+	var flight := PackedFloat32Array()
+	flight.resize(ax * rows * 4)
 	pos.resize(ax * rows)
 	nrm.resize(ax * rows)
 	tan.resize(ax * rows * 4)
@@ -515,6 +528,10 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 			var ft := 0.0
 			var th := 0.0
 			var wet := 1.0
+			var t_fl := 0.0
+			var spd := v0
+			var fallen_v := 0.0
+			var plunge := _plunge_at(s)
 			if not fall.is_empty():
 				var lead := 0.0
 				var throw := 1.0
@@ -536,9 +553,14 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 				if s > fall[0]:
 					y = fall[2]
 					slope = 0.0
+				# before the lip: still the river, arriving at the brink speed
+				t_fl = minf(x, 0.0) / v0
 				if x > 0.0 and x < run:
 					ft = x / run
 					var fallen := drop * ft * ft
+					fallen_v = fallen
+					t_fl = sqrt(2.0 * fallen / 9.81)
+					spd = sqrt(v0 * v0 + 19.62 * fallen)
 					y -= fallen
 					slope = 2.0 * drop * ft / run
 					if has_cols:
@@ -553,6 +575,13 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 					state[p] = 1
 				elif x >= run:
 					state[p] = 2
+					# landed: this is the pool now, water across the whole
+					# ribbon (the sheet's mask only says where it falls)
+					wet = 1.0
+					fallen_v = drop
+					spd = sqrt(v0 * v0 + 19.62 * drop)
+					t_fl = sqrt(2.0 * drop / 9.81) + (x - run) / spd
+					plunge = exp(-(x - run) / PLUNGE_REACH)
 					# landed already: pool at the foot of the fall
 					y = fall[3]
 					slope = 0.0
@@ -569,6 +598,10 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 			uv[p] = Vector2(u, v)
 			uv2[p] = Vector2(d, s)
 			thick[p] = th
+			flight[p * 4] = t_fl
+			flight[p * 4 + 1] = spd
+			flight[p * 4 + 2] = fallen_v
+			flight[p * 4 + 3] = plunge * wet
 			# in the air the ribbon only exists where there is water: red
 			# fades it out past the edges of the sheet
 			col[p] = Color(wet, 0.0, ft)
@@ -590,9 +623,9 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 			p += 1
 	# Columns land at different places, so along the foot of the fall a
 	# vertex still in the air has neighbours already on the pool. Those are
-	# the sheet's foot (progress 1) and the ribbon fades out there: the
-	# sheet ends in the pool, instead of the pool's surface being pulled up
-	# to it as a white wall.
+	# the sheet's foot (progress 1): the shader turns it into the ragged,
+	# boiling white where the fall hits the pool (fading the ribbon out here
+	# instead leaves a see-through gap between the sheet and the pool).
 	for r in rows:
 		for i in ax:
 			var q := r * ax + i
@@ -601,7 +634,6 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 			if (r > 0 and state[q - ax] == 1) or (i > 0 and state[q - 1] == 1) \
 					or (i < ax - 1 and state[q + 1] == 1):
 				col[q].b = 1.0
-				col[q].r = 0.0
 	# A waterfall is a sheet with thickness: an upper surface (the ribbon)
 	# and a lower one behind it. The sheet is as thick as the flow at the
 	# brink and thins as it speeds up (thickness x speed stays constant); at
@@ -625,6 +657,7 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 				tan.append_array([tan[src * 4], tan[src * 4 + 1], tan[src * 4 + 2], tan[src * 4 + 3]])
 				uv.append(uv[src])
 				uv2.append(uv2[src])
+				flight.append_array([flight[src * 4], flight[src * 4 + 1], flight[src * 4 + 2], 0.0])
 				# alpha 0 marks the lower surface
 				col.append(Color(col[src].r, col[src].g, col[src].b, 0.0))
 		# the lower surface is drawn first, the upper one over it
@@ -660,9 +693,11 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_TEX_UV2] = uv2
 	arrays[Mesh.ARRAY_COLOR] = col
+	arrays[Mesh.ARRAY_CUSTOM0] = flight
 	arrays[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+		Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = _material
@@ -709,6 +744,17 @@ static func _smooth_across(src: PackedFloat32Array, radius: int) -> PackedFloat3
 	return cur
 
 
+## Churn of the pool below a fall, for a row past the fall's foot (1 at the
+## foot, fading downstream).
+func _plunge_at(s: float) -> float:
+	if not _falls_valid:
+		_update_falls()
+	for f: Array in _falls:
+		if s >= f[1] and s < f[1] + PLUNGE_REACH * 4.0:
+			return exp(-(s - f[1]) / PLUNGE_REACH)
+	return 0.0
+
+
 ## The waterfall section a row belongs to: on its arc, or within the few
 ## metres above the lip where a column may already have left the ground.
 func _fall_near(s: float) -> Array:
@@ -729,6 +775,183 @@ func _brink_speed() -> float:
 			if data.row_slope[j] > waterfall_threshold:
 				return clampf(data.row_mean_speed[j - 1], 0.8, 4.0)
 	return 1.6
+
+
+# ------------------------------------------------------- bodies in the falls --
+
+const FALL_LINE_STEP := 0.05
+const FALL_BLOCKER_GROUP := &"flowing_water_fall_blockers"
+## Bodies further than this from the camera do not part the falls.
+const FALL_HIT_DISTANCE := 40.0
+
+var _fall_hits: WaterFallHits
+var _fall_splash: GPUParticles3D
+var _fall_hit_range := Vector2(-1.0, -1.0)
+
+
+func _fall_line(fi: int) -> Array:
+	if not _falls_valid:
+		_update_falls()
+	while _fall_lines.size() < _falls.size():
+		var f: Array = _falls[_fall_lines.size()]
+		var line := []
+		var s: float = f[0]
+		while s <= float(f[1]):
+			var fr := frame_at(s)
+			line.append([fr["pos"], fr["dir"], fr["side"], float(fr["half_width"]) + MARGIN])
+			s += FALL_LINE_STEP
+		_fall_lines.append(line)
+	return _fall_lines[fi]
+
+
+## Where a body standing in a fall meets the sheet: the topmost point of
+## the sheet's centre line inside the body. Returns [] when it is not in
+## the water, else [t_flight, u, half_width_u, contact (local)].
+func _fall_contact(fi: int, bottom: Vector3, top_y: float, radius: float) -> Array:
+	var f: Array = _falls[fi]
+	for e: Array in _fall_line(fi):
+		var c: Vector3 = e[0]
+		if c.y > top_y + 0.05:
+			continue
+		if c.y < bottom.y - 0.05:
+			break
+		var rel := bottom - c
+		var dir: Vector3 = e[1]
+		var side: Vector3 = e[2]
+		var hw: float = e[3]
+		# (the sheet has a thickness and wobbles: a little slack)
+		if absf(rel.x * dir.x + rel.z * dir.z) > radius + 0.15:
+			continue
+		var d := rel.x * side.x + rel.z * side.z
+		if absf(d) > hw:
+			continue
+		var t := sqrt(2.0 * maxf(float(f[2]) - c.y, 0.0) / 9.81)
+		return [t, (d + hw) / (2.0 * hw), radius / (2.0 * hw), c + side * d]
+	return []
+
+
+func _update_fall_hits(delta: float) -> void:
+	if not _falls_valid:
+		_update_falls()
+	if _falls.is_empty():
+		return
+	var cam := get_viewport().get_camera_3d() if get_viewport() != null else null
+	if cam == null:
+		return
+	if _fall_hits == null:
+		_fall_hits = WaterFallHits.new()
+	_fall_hits.step(delta)
+	var inv := global_transform.affine_inverse()
+	var cam_l := inv * cam.global_position
+	# one grid per river: it follows the fall nearest the camera
+	var best := -1
+	var best_d := FALL_HIT_DISTANCE
+	for fi in _falls.size():
+		var f: Array = _falls[fi]
+		var lip := Vector3(f[4].x, f[2], f[4].y)
+		var dd := cam_l.distance_to(lip)
+		if dd < best_d:
+			best_d = dd
+			best = fi
+	var contact := Vector3.INF
+	var contact_dir := Vector3.FORWARD
+	if best >= 0:
+		var f: Array = _falls[best]
+		for node in get_tree().get_nodes_in_group(FALL_BLOCKER_GROUP):
+			if not node.has_method("fall_blocker_shapes"):
+				continue
+			for shape: Array in node.fall_blocker_shapes():
+				# [bottom (world), top_y (world), radius]
+				var b: Vector3 = inv * (shape[0] as Vector3)
+				var top_y: float = (inv * Vector3(shape[0].x, shape[1], shape[0].z)).y
+				var hit := _fall_contact(best, b, top_y, float(shape[2]))
+				if hit.is_empty():
+					continue
+				_fall_hits.mark(hit[0], hit[1] - hit[2], hit[1] + hit[2], 1.0)
+				if contact == Vector3.INF or (hit[3] as Vector3).y > contact.y:
+					contact = hit[3]
+					contact_dir = _fall_line(best)[0][1]
+		_fall_hit_range = Vector2(float(f[0]) - 1.0, float(f[1]) + 0.5)
+	_fall_hits.upload()
+	# (every frame: a quality or style change rebuilds the materials)
+	for m in _all_materials():
+		m.set_shader_parameter("fall_hit_tex", _fall_hits.texture)
+		m.set_shader_parameter("fall_hit_rows", float(WaterFallHits.ROWS))
+		m.set_shader_parameter("fall_hit_dt", WaterFallHits.ROW_DT)
+		m.set_shader_parameter("fall_hit_s", _fall_hit_range)
+		m.set_shader_parameter("fall_hit_head", _fall_hits.head)
+		m.set_shader_parameter("fall_hit_on", 1.0 if _fall_hits.active else 0.0)
+	_update_fall_splash(contact, contact_dir)
+
+
+## Water hitting a body in a fall bursts off it in a spray of drops.
+func _update_fall_splash(contact: Vector3, dir: Vector3) -> void:
+	if contact == Vector3.INF:
+		if _fall_splash != null:
+			_fall_splash.emitting = false
+		return
+	if _fall_splash == null:
+		_fall_splash = _make_fall_splash()
+		add_child(_fall_splash, false, Node.INTERNAL_MODE_BACK)
+	_fall_splash.position = contact
+	var pm := _fall_splash.process_material as ParticleProcessMaterial
+	# thrown out of the sheet, forward and to the sides, then falling
+	pm.direction = (global_transform.basis * (dir + Vector3.UP * 0.6)).normalized()
+	_fall_splash.emitting = true
+
+
+func _make_fall_splash() -> GPUParticles3D:
+	var em := GPUParticles3D.new()
+	em.amount = 160
+	em.lifetime = 0.9
+	em.local_coords = false
+	em.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.15
+	pm.direction = Vector3(0, 0.5, 1)
+	pm.spread = 75.0
+	pm.initial_velocity_min = 1.2
+	pm.initial_velocity_max = 3.4
+	pm.gravity = Vector3(0, -9.8, 0)
+	pm.damping_min = 0.4
+	pm.damping_max = 1.2
+	pm.scale_min = 0.025
+	pm.scale_max = 0.09
+	var fade := Gradient.new()
+	fade.set_color(0, Color(1, 1, 1, 0.85))
+	fade.set_color(1, Color(1, 1, 1, 0.0))
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = fade
+	pm.color_ramp = ramp
+	em.process_material = pm
+	var quad := QuadMesh.new()
+	quad.size = Vector2.ONE
+	var m := StandardMaterial3D.new()
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	m.billboard_keep_scale = true
+	m.vertex_color_use_as_albedo = true
+	m.albedo_color = Color(0.92, 0.94, 0.95)
+	m.albedo_texture = WaterSprayFactory._soft_circle()
+	m.disable_receive_shadows = true
+	quad.material = m
+	em.draw_pass_1 = quad
+	em.custom_aabb = AABB(Vector3(-4, -6, -4), Vector3(8, 10, 8))
+	return em
+
+
+## Every material this river draws with (segment clones included).
+func _all_materials() -> Array[ShaderMaterial]:
+	var out: Array[ShaderMaterial] = []
+	for m in _materials():
+		if m != null:
+			out.append(m)
+	for pair: Array in _seg_mats.values():
+		for m in pair:
+			out.append(m)
+	return out
 
 
 # ------------------------------------------------------------------- segments --

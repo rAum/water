@@ -147,40 +147,97 @@ static func _tile2(x: float, y: float, perx: int, pery: int, seed: int) -> float
 	return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy
 
 
-## The waterfall "fluid" texture. Falling water is not stripes: it is
-## curtains of uneven width, bright ridged strands with darker gaps between
-## them, fine fibres, and clumps - surges that start and stop along the fall.
-## Tileable.
-##   r = slope across the fall (relief), g = clumps/surges,
-##   b = density of the sheet (curtains x strands x fibres), a = fine fibres.
+## The waterfall "fluid" texture. Tileable; the shader reads it in the
+## falling water's own frame: across the fall (u, about 3.4 m per tile) and
+## by the moment the water left the lip (v, about 1.7 s per tile), so
+## everything drawn here rides down with the water and stretches as it
+## speeds up.
+##
+## Falling water is not stripes. What the eye reads in a real fall is:
+##  - columns: the lip is uneven, so the sheet carries long streaks of
+##    thicker and thinner water that persist all the way down;
+##  - jets: lumps of water that surge ahead with a dense, rounded head and
+##    a fraying tail of the water behind them (the "arrowheads" of a fall);
+##  - fibres: fine threads and beads in between.
+## The jets are splatted as particles (head downstream, tail upstream);
+## columns and fibres are tileable noise.
+##   r = slope across the fall (relief), g = clumps/surges (low frequency),
+##   b = density of the sheet, a = fine fibres.
 static func generate_fall(n: int = 512) -> ImageTexture:
 	var dens := PackedFloat32Array()
 	dens.resize(n * n)
+	var jets := PackedFloat32Array()
+	jets.resize(n * n)
 	var clumps := PackedFloat32Array()
 	clumps.resize(n * n)
 	var fib := PackedFloat32Array()
 	fib.resize(n * n)
+
+	# --- jets: splatted lumps with a head and a tail ------------------------
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7351
+	var fn := float(n)
+	for c in 360:
+		var cx := rng.randf() * fn
+		var cy := rng.randf() * fn
+		# small jets are common, big ones rare
+		var w := lerpf(2.0, 11.0, pow(rng.randf(), 2.0))
+		var tail := w * lerpf(6.0, 16.0, rng.randf())
+		var amp := lerpf(0.45, 1.0, rng.randf())
+		var lean := (rng.randf() - 0.5) * 0.25     # tails are not perfectly vertical
+		var x0 := int(floor(cx - w * 3.0 - absf(lean) * tail))
+		var x1 := int(ceil(cx + w * 3.0 + absf(lean) * tail))
+		var y0 := int(floor(cy - tail))
+		var y1 := int(ceil(cy + w * 2.4))
+		for yy in range(y0, y1 + 1):
+			var dy := cy - float(yy)        # > 0: in the tail (upstream)
+			var along := 0.0
+			var wt := w
+			var xc := cx
+			if dy > 0.0:
+				var a := dy / tail
+				# the head is dense, the tail thins and frays out
+				along = exp(-2.4 * a) * (1.0 - a)
+				wt = w * (1.0 + 0.5 * a)
+				xc = cx + lean * dy
+			else:
+				var hy := -dy / (1.1 * w)
+				along = exp(-hy * hy)
+			if along < 0.01:
+				continue
+			var row := (((yy % n) + n) % n) * n
+			for xx in range(x0, x1 + 1):
+				var dx := (float(xx) - xc) / wt
+				var v := amp * along * exp(-dx * dx)
+				if v < 0.01:
+					continue
+				var k := row + (((xx % n) + n) % n)
+				jets[k] = 1.0 - (1.0 - jets[k]) * (1.0 - v)
+
 	for y in n:
 		for x in n:
-			var u := float(x) / float(n)
-			var v := float(y) / float(n)
-			# warp across, so strands wander and widths vary instead of
+			var u := float(x) / fn
+			var v := float(y) / fn
+			# warp across, so columns wander and widths vary instead of
 			# repeating like a barcode
-			var wu := u + 0.045 * (_tile2(u * 3.0, v * 2.0, 3, 2, 5) - 0.5) \
-				+ 0.012 * (_tile2(u * 9.0, v * 4.0, 9, 4, 6) - 0.5)
-			var curtain := _tile2(wu * 4.0, v * 2.0, 4, 2, 11) * 0.6 + _tile2(wu * 9.0, v * 3.0, 9, 3, 12) * 0.4
-			# ridged: thin bright strands, broader dark gaps
-			var s1 := 1.0 - absf(2.0 * _tile2(wu * 19.0, v * 3.0, 19, 3, 21) - 1.0)
-			var s2 := 1.0 - absf(2.0 * _tile2(wu * 43.0, v * 5.0, 43, 5, 22) - 1.0)
-			var strands := pow(s1, 1.6) * 0.62 + pow(s2, 1.4) * 0.38
-			var fb := _tile2(wu * 110.0, v * 7.0, 110, 7, 31) * 0.6 + _tile2(wu * 210.0, v * 11.0, 210, 11, 32) * 0.4
-			# clumps: roughly as long as wide, so the fall has surges along it
+			var wu := u + 0.04 * (_tile2(u * 3.0, v * 2.0, 3, 2, 5) - 0.5) \
+				+ 0.012 * (_tile2(u * 9.0, v * 5.0, 9, 5, 6) - 0.5)
+			# columns: long-lived thick and thin streaks from the uneven lip
+			var col := _tile2(wu * 7.0, v * 2.0, 7, 2, 11) * 0.6 + _tile2(wu * 17.0, v * 3.0, 17, 3, 12) * 0.4
+			var ridge := 1.0 - absf(2.0 * _tile2(wu * 31.0, v * 4.0, 31, 4, 21) - 1.0)
+			var streak := clampf((col - 0.5) * 1.8 + 0.5, 0.0, 1.0) * (0.55 + 0.45 * pow(ridge, 1.5))
+			# fibres: fine threads cut into short beads along the fall
+			var fb := _tile2(wu * 120.0, v * 16.0, 120, 16, 31) * 0.6 + _tile2(wu * 230.0, v * 28.0, 230, 28, 32) * 0.4
+			# clumps: surges roughly as long as wide
 			var cl := _tile2(u * 6.0, v * 6.0, 6, 6, 41) * 0.6 + _tile2(u * 13.0, v * 11.0, 13, 11, 42) * 0.4
 			var k := y * n + x
 			clumps[k] = clampf((cl - 0.5) * 2.2 + 0.5, 0.0, 1.0)
 			fib[k] = clampf((fb - 0.5) * 2.4 + 0.5, 0.0, 1.0)
-			var d := (0.25 + 0.75 * curtain) * (0.3 + 0.7 * strands) * (0.75 + 0.25 * fb)
-			dens[k] = clampf(d * 1.9 - 0.12 + (cl - 0.5) * 0.3, 0.0, 1.0)
+			var j := jets[k]
+			# the sheet: columns as a base, jets on top, fibres as grain
+			var d := streak * 0.7 * (0.8 + 0.2 * fb)
+			d = 1.0 - (1.0 - d) * (1.0 - j * 0.85)
+			dens[k] = clampf(d * 1.15 - 0.04 + (cl - 0.5) * 0.18, 0.0, 1.0)
 	var out := PackedByteArray()
 	out.resize(n * n * 4)
 	for y in n:

@@ -110,6 +110,19 @@ global uniform vec4 flowing_water_ripple_rect;
 global uniform float flowing_water_turbidity;
 global uniform vec3 flowing_water_storm_color;
 
+// Bodies standing in a fall (WaterFallHits): a ring buffer across the
+// ribbon (u) by time of flight; a cell written where a body meets the sheet
+// rides down with the water and cuts a gap below the body.
+uniform sampler2D fall_hit_tex : filter_linear, repeat_enable, hint_default_black;
+uniform float fall_hit_on = 0.0;
+uniform float fall_hit_head = 0.0;
+uniform float fall_hit_rows = 64.0;
+uniform float fall_hit_dt = 0.025;
+uniform vec2 fall_hit_s = vec2(-1.0);
+
+// fall texture units per second of the water's flight
+#define FALL_TEX_RATE 0.6
+
 // --- varyings -----------------------------------------------------------------
 varying vec2 v_metric;      // metres: x across (river) / world x (pond), y downstream / world z
 varying vec2 v_wave_slope;  // standing-wave slope contribution
@@ -119,6 +132,8 @@ varying vec3 v_side;        // world across direction (horizontal)
 varying vec3 v_norm0;       // base surface normal
 varying float v_fade;       // junction extension fade (1 = solid water)
 varying float v_fall_t;     // 0 at a waterfall's lip .. 1 at its foot (0 off falls)
+varying vec3 v_flight;
+varying float v_plunge;    // 1 where a fall lands in the pool, fading downstream (CUSTOM0.w)     // falls: seconds since the lip, speed (m/s), metres fallen (CUSTOM0)
 varying float v_shell;      // 1 = upper surface, 0 = lower surface of a falling sheet
 
 const float WPI = 3.14159265;

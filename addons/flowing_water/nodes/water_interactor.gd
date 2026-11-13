@@ -48,6 +48,15 @@ func get_push() -> Vector3:
 
 func _ready() -> void:
 	_last_pos = global_position
+	if not Engine.is_editor_hint():
+		add_to_group(WaterRiver.FALL_BLOCKER_GROUP)
+
+
+## The body as waterfalls see it: a standing column from the feet up
+## (WaterRiver parts a falling sheet around it).
+func fall_blocker_shapes() -> Array:
+	var p := global_position
+	return [[p, p.y + height, radius]]
 
 
 func _physics_process(delta: float) -> void:

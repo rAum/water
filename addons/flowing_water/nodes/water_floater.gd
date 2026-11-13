@@ -67,6 +67,20 @@ func _ready() -> void:
 	_body.can_sleep = true
 	# lets game code find things the player can pick up or shove
 	_body.add_to_group("flowing_water_grabbable")
+	add_to_group(WaterRiver.FALL_BLOCKER_GROUP)
+
+
+## The body as waterfalls see it: a short column at each sample point
+## (WaterRiver parts a falling sheet around it - hold a log in a fall).
+func fall_blocker_shapes() -> Array:
+	var out := []
+	if _body == null:
+		return out
+	var xf := _body.global_transform
+	for p in _points:
+		var w := xf * p
+		out.append([w - Vector3.UP * 0.12, w.y + 0.3, 0.2])
+	return out
 
 
 func _collect_points() -> void:
