@@ -1,15 +1,15 @@
 [gd_resource type="ShaderMaterial" format=3]
 
-[ext_resource type="Shader" path="res://addons/flowing_water/render/rock_receiver_textured.gdshader" id="1_xlwp1"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/models/rock_moss_set_02/textures/rock_moss_set_02_diff_1k.jpg" id="2_vklu5"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/models/rock_moss_set_02/textures/rock_moss_set_02_nor_gl_1k.jpg" id="3_242i3"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/models/rock_moss_set_02/textures/rock_moss_set_02_rough_1k.jpg" id="4_kowsi"]
+[ext_resource type="Shader" path="res://addons/flowing_water/render/rock_receiver_textured.gdshader" id="1_e3osp"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/models/rock_moss_set_02/textures/rock_moss_set_02_diff_1k.jpg" id="2_t8yd0"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/models/rock_moss_set_02/textures/rock_moss_set_02_nor_gl_1k.jpg" id="3_naxof"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/models/rock_moss_set_02/textures/rock_moss_set_02_rough_1k.jpg" id="4_iav6l"]
 
 [resource]
 render_priority = 0
-shader = ExtResource("1_xlwp1")
-shader_parameter/albedo_map = ExtResource("2_vklu5")
-shader_parameter/normal_map = ExtResource("3_242i3")
-shader_parameter/roughness_map = ExtResource("4_kowsi")
+shader = ExtResource("1_e3osp")
+shader_parameter/albedo_map = ExtResource("2_t8yd0")
+shader_parameter/normal_map = ExtResource("3_naxof")
+shader_parameter/roughness_map = ExtResource("4_iav6l")
 shader_parameter/tint = Color(1, 1, 1, 1)
 shader_parameter/normal_strength = 1.0

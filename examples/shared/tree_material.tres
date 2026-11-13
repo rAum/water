@@ -1,9 +1,9 @@
 [gd_resource type="ShaderMaterial" format=3]
 
-[ext_resource type="Shader" path="res://examples/shared/tree.gdshader" id="1_jkbb6"]
-[ext_resource type="Texture2D" path="res://examples/shared/conifer_branch.res" id="2_5upru"]
+[ext_resource type="Shader" path="res://examples/shared/tree.gdshader" id="1_mq6a7"]
+[ext_resource type="Texture2D" path="res://examples/shared/conifer_branch.res" id="2_kd4y1"]
 
 [resource]
 render_priority = 0
-shader = ExtResource("1_jkbb6")
-shader_parameter/branch_tex = ExtResource("2_5upru")
+shader = ExtResource("1_mq6a7")
+shader_parameter/branch_tex = ExtResource("2_kd4y1")

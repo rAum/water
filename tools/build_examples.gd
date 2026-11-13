@@ -13,6 +13,10 @@ const ADDON := "res://addons/flowing_water/"
 const EX := "res://examples/"
 const SH := EX + "shared/"
 const STEP := 0.5
+## The bed is carved this far past a river's half width (the ribbon itself
+## reaches WaterRiver.MARGIN past it), so the water fills its bed to the
+## bank instead of leaving a dry gravel shelf along both sides.
+const CHANNEL_EXTRA := 0.3
 
 var _rng := RandomNumberGenerator.new()
 
@@ -150,7 +154,7 @@ func _specs() -> Array:
 	out.append({
 		"name": "demo", "dir": "res://examples/demo/", "size": Vector2(110, 112), "seed": 7,
 		"title": "Flowing Water demo",
-		"description": "Stream -> rapids -> waterfall -> pond -> outlet. Click to capture the mouse,\nWASD to walk, Space to jump.",
+		"description": "Stream -> rapids -> waterfall -> pond -> outlet. Click to capture the mouse,\nWASD to walk, Shift to run, Space to jump.",
 		"rivers": [
 			{"name": "Stream", "style": "clear_mountain", "discharge": 1.6, "rocks": 20,
 				"points": _into_pond(_with_fall(_meander(3.0, 42.0, 4.0, 0.0, 4.0, 0.15, 0.0,
@@ -721,12 +725,14 @@ func _bed_depth(hw: float) -> float:
 
 
 func _bank(d: float) -> float:
-	if d < 1.2:
-		return 0.09 * d
+	# the bank rises from the water's edge (a flat shelf at the waterline
+	# reads as dry riverbed the water does not reach)
+	if d < 0.6:
+		return 0.32 * d
 	if d < 4.0:
-		return 0.108 + (d - 1.2) * 0.42
+		return 0.192 + (d - 0.6) * 0.3388
 	var e := d - 4.0
-	return 1.284 + e * 0.14 + minf(e, 30.0) * minf(e, 30.0) * 0.004
+	return 1.344 + e * 0.14 + minf(e, 30.0) * minf(e, 30.0) * 0.004
 
 
 static func _smin(a: float, b: float, k: float) -> float:
@@ -751,12 +757,13 @@ func _height(x: float, z: float) -> Vector2:
 				bd = d2
 				bi = n
 		var dist := sqrt(bd)
-		var hw := _f_hw[r][bi]
+		var hw_river: float = _f_hw[r][bi]
+		var hw := hw_river + CHANNEL_EXTRA
 		var wy := pts[bi].y
 		var d := dist - hw
 		var v: float
 		if d < 0.0:
-			v = wy - _bed_depth(hw) * (1.0 - pow(dist / hw, 2.4)) - 0.03
+			v = wy - _bed_depth(hw_river) * (1.0 - pow(dist / hw, 2.4)) - 0.03
 		else:
 			v = wy + _bank(d * wobble) * _bank_scale
 		best = _smin(best, v, 0.7) if best < 1e8 else v
@@ -772,7 +779,8 @@ func _height(x: float, z: float) -> Vector2:
 			sd = -sd
 		var v: float
 		if sd < 0.0:
-			v = c.y - float(pond[2]) * pow(smoothstep(0.0, 5.0, -sd), 0.85) - 0.04
+			# (meets the bank at the waterline: no step at the outline)
+			v = c.y - float(pond[2]) * pow(smoothstep(0.0, 5.0, -sd), 0.85) - 0.04 * smoothstep(0.0, 0.4, -sd)
 		else:
 			v = c.y + _bank(sd * wobble)
 		best = _smin(best, v, 0.7) if best < 1e8 else v
@@ -837,7 +845,9 @@ func _build_terrain(root: Node3D, spec: Dictionary, data_dir: String) -> void:
 			_grid_h[k] = hv.x
 			_grid_d[k] = hv.y
 			pos[k] = Vector3(x, hv.x, z)
-			col[k] = Color(1.0 - smoothstep(0.2, 2.4, hv.y), _mud, smoothstep(7.0, 16.0, hv.y))
+			# pebble bar: the bed and a narrow wet fringe above the waterline,
+			# not a wide dry shelf beside the water
+			col[k] = Color(1.0 - smoothstep(-0.15, 0.45, hv.y), _mud, smoothstep(7.0, 16.0, hv.y))
 	# A height grid cannot hold a vertical face: where a cliff crosses it
 	# diagonally it turns into stair-steps. Relax just those cells so rock
 	# faces come out as clean steep slopes.
@@ -1351,7 +1361,7 @@ func _place_vegetation(root: Node3D, spec: Dictionary, data_dir: String) -> void
 			var gz := z + (_rng.randf() - 0.5) * spacing
 			var d := _grid_sample(_grid_d, gx, gz)
 			x += spacing
-			if d < 1.5 or d > 28.0:
+			if d < 0.9 or d > 28.0:
 				continue
 			# thin out with distance and in patches
 			var keep := (1.0 - smoothstep(14.0, 28.0, d)) * smoothstep(1.5, 2.8, d)

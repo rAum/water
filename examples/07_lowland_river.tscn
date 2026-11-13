@@ -1,64 +1,64 @@
 [gd_scene format=3]
 
-[ext_resource type="Environment" path="res://examples/shared/environment.tres" id="1_6x3go"]
-[ext_resource type="Script" path="res://addons/flowing_water/nodes/water_river.gd" id="2_t313y"]
-[ext_resource type="Resource" path="res://addons/flowing_water/styles/lowland.tres" id="3_ctait"]
-[ext_resource type="Script" path="res://addons/flowing_water/bake/water_data.gd" id="4_j78uf"]
-[ext_resource type="Resource" path="res://examples/data/07_lowland_river_River_water_0.res" id="5_vqd8d"]
-[ext_resource type="ArrayMesh" path="res://examples/data/07_lowland_river_terrain.res" id="6_swde4"]
-[ext_resource type="Shape3D" path="res://examples/data/07_lowland_river_terrain_shape.res" id="7_prib0"]
-[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_10.res" id="8_3smuy"]
-[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_08.res" id="9_bxvgl"]
-[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_03.res" id="10_ote4m"]
-[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_00.res" id="11_y6p2l"]
-[ext_resource type="MultiMesh" path="res://examples/data/07_lowland_river_trees.res" id="12_n8crm"]
-[ext_resource type="MultiMesh" path="res://examples/data/07_lowland_river_grass.res" id="13_5wyyg"]
-[ext_resource type="MultiMesh" path="res://examples/data/07_lowland_river_reeds.res" id="14_dca5h"]
-[ext_resource type="Script" path="res://addons/flowing_water/render/underwater_effect.gd" id="15_1ohpj"]
-[ext_resource type="Script" path="res://examples/shared/fly_camera.gd" id="16_a3mb2"]
-[ext_resource type="PackedScene" path="res://examples/shared/log.tscn" id="17_3sjau"]
-[ext_resource type="Script" path="res://examples/shared/example_ui.gd" id="18_3j0db"]
+[ext_resource type="Environment" path="res://examples/shared/environment.tres" id="1_fg6jy"]
+[ext_resource type="Script" path="res://addons/flowing_water/nodes/water_river.gd" id="2_cukby"]
+[ext_resource type="Resource" path="res://addons/flowing_water/styles/lowland.tres" id="3_mycp2"]
+[ext_resource type="Script" path="res://addons/flowing_water/bake/water_data.gd" id="4_8kjc3"]
+[ext_resource type="Resource" path="res://examples/data/07_lowland_river_River_water_0.res" id="5_667ks"]
+[ext_resource type="ArrayMesh" path="res://examples/data/07_lowland_river_terrain.res" id="6_vplvo"]
+[ext_resource type="Shape3D" path="res://examples/data/07_lowland_river_terrain_shape.res" id="7_eqe45"]
+[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_10.res" id="8_8kol2"]
+[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_08.res" id="9_4kv4w"]
+[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_03.res" id="10_a21mm"]
+[ext_resource type="ArrayMesh" path="res://examples/shared/rocks/rock_00.res" id="11_soe60"]
+[ext_resource type="MultiMesh" path="res://examples/data/07_lowland_river_trees.res" id="12_sdpbk"]
+[ext_resource type="MultiMesh" path="res://examples/data/07_lowland_river_grass.res" id="13_t6ooq"]
+[ext_resource type="MultiMesh" path="res://examples/data/07_lowland_river_reeds.res" id="14_dcfps"]
+[ext_resource type="Script" path="res://addons/flowing_water/render/underwater_effect.gd" id="15_koeht"]
+[ext_resource type="Script" path="res://examples/shared/fly_camera.gd" id="16_hw1nc"]
+[ext_resource type="PackedScene" path="res://examples/shared/log.tscn" id="17_fqert"]
+[ext_resource type="Script" path="res://examples/shared/example_ui.gd" id="18_1kfh5"]
 
-[sub_resource type="Curve3D" id="Curve3D_p8v3n"]
+[sub_resource type="Curve3D" id="Curve3D_vl3fn"]
 _data = {
 "points": PackedVector3Array(-0.4216528, 0, -1.3333334, 0.4216528, 0, 1.3333334, 7.358639, 0.076800026, -60, -0.4098536, 0.00316038, -2.6666667, 0.4098536, -0.00316038, 2.6666667, 9.888556, 0.06720003, -52, 0.33046016, 0.0031796405, -2.6666667, -0.33046016, -0.0031796405, 2.6666667, 9.81776, 0.05760003, -44, 0.7154134, 0.0031988067, -2.6666667, -0.7154134, -0.0031988067, 2.6666667, 7.9057946, 0.04800003, -36, 0.6916129, 0.0031979512, -2.6666667, -0.6916129, -0.0031979512, 2.6666667, 5.52528, 0.038400028, -28, 0.46328542, 0.003196616, -2.6666667, -0.46328542, -0.003196616, 2.6666667, 3.756117, 0.02880003, -20, 0.3358742, 0.0032000002, -2.6666667, -0.3358742, -0.0032000002, 2.6666667, 2.7455676, 0.019200029, -12, 0.49811426, 0.0031944176, -2.6666667, -0.49811426, -0.0031944176, 2.6666667, 1.7408719, 0.009600029, -4, 0.8862408, 0.0031908038, -2.6666667, -0.8862408, -0.0031908038, 2.6666667, -0.24311805, 2.9373169e-08, 4, 1.2199755, 0.0031981792, -2.6666667, -1.2199755, -0.0031981792, 2.6666667, -3.5765731, -0.009599971, 12, 1.1876736, 0.0031968825, -2.6666667, -1.1876736, -0.0031968825, 2.6666667, -7.5629706, -0.019199971, 20, 0.660311, 0.0031705785, -2.6666667, -0.660311, -0.0031705785, 2.6666667, -10.702615, -0.02879997, 28, -0.20577669, 0.0031499916, -2.6666667, 0.20577669, -0.0031499916, 2.6666667, -11.524837, -0.038399972, 36, -1.0463684, 0.0031781904, -2.6666667, 1.0463684, -0.0031781904, 2.6666667, -9.467955, -0.04799997, 44, -1.4999384, 0.0031988812, -2.6666667, 1.4999384, -0.0031988812, 2.6666667, -5.2466264, -0.05759997, 52, -0.79638356, 0, -1.3333334, 0.79638356, 0, 1.3333334, -0.468325, -0.06719997, 60),
 "tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 }
 point_count = 16
 
-[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_6dlwt"]
+[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_ntsoa"]
 points = PackedVector3Array(-0.027813423, 0.14561741, 0.11333278, -0.12611532, 0.060514316, -0.16841675, -0.14871553, 0.030703086, -0.15388694, 0.22797354, 0.019661887, 0.026033835, -0.17291316, -0.003930685, 0.14394282, 0.13408452, 0.1394136, -0.04026675, -0.21775661, 0.10461718, 0.03118848, 0.18223509, 0.097406596, 0.082356066, 0, 0.0108418735, -0.12030664, -0.117902055, 0.10612078, -0.16258591, 0.17362536, 0.104553945, -0.07739868, -0.035807677, 0.16884562, 0.08088578, -0.15578984, 0.09016632, 0.16546297, 0.13859701, 0.0025631813, 0.097018585, 0.22978023, 0.12721296, 0.046701394, -0.24278563, 0.059930768, -0.043168936, 0.02105046, 0.1673162, 0.009067037, -0.0735375, 0.016614275, 0.15663779, -0.24368395, 0.035378467, 0.0024520387, -0.20069896, 0.11248669, 0.09888272, 0.021523312, 0.075697914, -0.14158903, 0.17039216, 0.016099365, 0.09853596, -0.17259407, 0.030193767, -0.14777482, 0.042796202, 0.0043847095, -0.06925235, -0.080128096, 0.11925824, 0.14791247, 0.1737581, 0.1480066, 0.052817203, -0.11518739, 0.14766063, 0.1244971, -0.07179093, 0.011096112, -0.12708667, 0.2399081, 0.11270474, 0.0022707386, -0.2404586, 0.06769658, 0.047360882, -0.17280696, 0.037635516, 0.16760662, 0.09079737, 0.15282074, -0.03287424)
 
-[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_twr7b"]
+[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_hkhn3"]
 points = PackedVector3Array(-0.11032077, 0.17785944, 0.19665283, -0.02146201, 0.083070464, -0.20932399, -0.08662597, 0.14053005, -0.16797763, 0.22327209, 0.111650355, 0.028571114, -0.11503428, 0.0038171164, 0.091552734, 0.21560133, 0.0038573248, 0.03626524, -8.354717e-09, 0.21004012, -0.100185834, -0.23898064, 0.17138562, 0.09499816, 0.2232326, 0.059598025, -0.17318237, -0.1583928, 0.010875178, -0.05227678, -0.13855608, 0.07318676, 0.22884072, 0.069278024, 0.18093456, 0.15181053, -0.15789519, 0.2193434, 0.01957384, -0.22800373, 0.06753953, 0.11566072, -0.043991007, 0.17034186, -0.19275892, 0.1159342, 0.118886285, 0.15017837, -0.17559053, 0.06777246, -0.08975389, -0.014321035, 0.047200933, -0.19537573, -0.021130217, 0.21728843, 0.110773, 0.070743166, 0.18947895, -0.10090066, 0.20016332, -0.0038082623, 0.028571114, -0.20531929, 0.18497506, 0.012633524, 0.21843962, 0.08984088, -0.16215223, -0.117087156, 0.20679443, 0.17369941, 0.18529665, 0.0746259, -0.19471526, -0.02194284, 0.13357443, 0.2027247, -0.08655465, 0.183787, -0.15342112, 0.12321454, 0.16555816, 0.12098955, 0.21642962, 0.039532352, -0.14618501, 0.20788231, 0.050076947, 0.07478033, -0.17730741, 0.05996557, 0.204852, -0.18857718, 0.017384524, -0.023685794)
 
-[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_x8w11"]
+[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_20okg"]
 points = PackedVector3Array(0.29197317, 0.17161633, 0.31604895, -0.38590544, 0.21790342, -0.5192032, -0.38307747, 0.28941667, -0.51541036, 0.5414825, 0.34124056, -0.34211558, -0.23607022, 0.93514377, -0.08333057, -0.48967728, 0.1836743, 0.28696182, 0.2958475, 0.028314125, -0.39318797, -0.018089235, 0.4268604, 0.5339966, -0.018089235, 0.91705805, -0.264774, 0.5629279, 0.37241492, -0.028792664, -0.5098001, 0.023897547, -0.36202842, -0.41474196, 0.61902905, 0.38720044, 0.19199939, 0.027129868, 0.11166717, -0.50444466, 0.35918006, -0.3930095, -0.43153983, 0.10107942, 0.2658818, -0.15580605, 0.93104094, -0.3046997, 0.44913104, 0.42905807, -0.39032373, -0.5576115, 0.30667564, 0.12899679, -0.3276604, 0.860136, -0.1827462, -0.23607022, 0.66272795, 0.4068813, 0.26034445, 0.08150261, 0.26746187, -0.12114058, 0.3250863, 0.5090638, 0.54472494, 0.44504032, -0.31941676, 0.33051297, 0.13290116, -0.4453006, 0.43305326, 0.13437513, -0.21814841, -0.51017743, 0.07641237, -0.4503023, -0.45536634, 0.007996549, -0.3432082, 0.05449524, 0.35423505, 0.5339966, -0.209412, 0.1493914, -0.51656747, -0.2766753, 0.15241197, 0.3699761, -0.050778426, 0.9035668, -0.31464902, -0.4656564, 0.3773257, -0.45870048)
 
-[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_mh8mh"]
+[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_bmors"]
 points = PackedVector3Array(-0.087789804, 0.45962426, 0.35772163, -0.39806822, 0.19100633, -0.53158766, -0.4694031, 0.096910685, -0.48572606, 0.7195717, 0.062060438, 0.082172744, -0.5457801, -0.012406745, 0.4543386, 0.42322204, 0.44004267, -0.12709726, -0.6873232, 0.33021182, 0.09844278, 0.57520366, 0.30745247, 0.25994724, 0, 0.0342211, -0.3797338, -0.37214398, 0.33495778, -0.51318336, 0.54802805, 0.33001226, -0.24429984, -0.11302273, 0.5329414, 0.25530645, -0.49173233, 0.28459942, 0.5222645, 0.4374652, 0.008090381, 0.30622777, 0.7252743, 0.40153277, 0.14740747, -0.76632434, 0.18916443, -0.13625768, 0.06644331, 0.52811396, 0.028619038, -0.2321125, 0.052441012, 0.4944088, -0.76915973, 0.111667976, 0.0077395723, -0.6334827, 0.35505104, 0.31211168, 0.06793581, 0.23893158, -0.44690916, 0.53782284, 0.050815754, 0.3110172, -0.5447729, 0.09530308, -0.46643385, 0.13508119, 0.01383982, -0.2185869, -0.25291494, 0.37642464, 0.46686837, 0.5484471, 0.46716544, 0.1667113, -0.3635755, 0.46607342, 0.3929605, -0.22659965, 0.035023574, -0.40113416, 0.7572417, 0.35573927, 0.00716732, -0.7589793, 0.21367632, 0.14948906, -0.5454449, 0.11879209, 0.5290306, 0.28659126, 0.4823607, -0.103763685)
 
-[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_s3gex"]
+[sub_resource type="ConvexPolygonShape3D" id="ConvexPolygonShape3D_7rad0"]
 points = PackedVector3Array(-0.26474383, 0.067011565, 0, 0.2630998, 0.14173919, 0.3412775, 0.19173272, 0.22743662, 0.3569578, 0.06022652, 0.309475, -0.3687517, 0.13873854, 0.010771152, 0, 0.033893187, 0.36214554, 0.13169114, -0.16357908, 0.17781736, -0.39507344, -0.018718036, 0.059317995, 0.34242997, -0.2689124, 0.1383425, 0.11848903, -0.04499593, 0.36214554, -0.2896215, -0.25577345, -0.0065482077, 0.05264345, -0.13724574, 0.07247628, -0.3555496, 0.16561528, 0.19097564, -0.27658442, 0.25780964, 0.04612233, 0.30290613, 0.16433138, 0.32349724, 0.22980702, 0.08661529, 0.309475, 0.31602573, -0.23984736, 0.14119875, -0.20997486, 0.032587886, 0.2159861, -0.40466374, 0.15845756, 0.11513729, 0.40307024, -0.24257906, -0.0065482077, 0.11848903, 0.007276412, 0.11512586, 0.36540437, -0.20427932, 0.07866759, -0.32348713, -0.21630116, 0.20413393, -0.15793036, 0.09296616, 0.36221385, 0.14707272, -0.1914814, 0.053997193, 0.22362016, -0.17671803, 0.04615971, -0.27658442, 0.25678802, 0.15465117, 0.24981247, 0.25999913, 0.08966023, 0.39163375, 0.27100405, 0.07247628, 0.27658442, 0.15305401, 0.008023776, 0.024312977, -0.25577345, 0.1383425, 0.14472823, 0.08661529, 0.335829, 0.2896215)
 
-[sub_resource type="CompositorEffect" id="CompositorEffect_55xmh"]
+[sub_resource type="CompositorEffect" id="CompositorEffect_lp07b"]
 resource_local_to_scene = false
 resource_name = ""
 enabled = true
 effect_callback_type = 4
 needs_motion_vectors = false
 needs_normal_roughness = false
-script = ExtResource("15_1ohpj")
+script = ExtResource("15_koeht")
 
-[sub_resource type="Compositor" id="Compositor_jxlhf"]
-compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_55xmh")])
+[sub_resource type="Compositor" id="Compositor_pf5fw"]
+compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_lp07b")])
 
-[node name="07LowlandRiver" type="Node3D" unique_id=365410304]
+[node name="07LowlandRiver" type="Node3D" unique_id=817986334]
 
-[node name="Environment" type="WorldEnvironment" parent="." unique_id=1320365811]
-environment = ExtResource("1_6x3go")
+[node name="Environment" type="WorldEnvironment" parent="." unique_id=2056921643]
+environment = ExtResource("1_fg6jy")
 
-[node name="Sun" type="DirectionalLight3D" parent="." unique_id=1835448210]
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=326752084]
 transform = Transform3D(0.57357645, 0.52654076, -0.62750685, 0, 0.76604444, 0.6427876, 0.81915206, -0.3686878, 0.43938506, 0, 0, 0)
 light_color = Color(1, 0.96, 0.88, 1)
 light_energy = 1.55
@@ -67,121 +67,121 @@ shadow_enabled = true
 shadow_blur = 1.4
 directional_shadow_max_distance = 110.0
 
-[node name="River" type="Path3D" parent="." unique_id=401795663]
-curve = SubResource("Curve3D_p8v3n")
-script = ExtResource("2_t313y")
+[node name="River" type="Path3D" parent="." unique_id=1469888422]
+curve = SubResource("Curve3D_vl3fn")
+script = ExtResource("2_cukby")
 widths = PackedFloat32Array(7.3953605, 8.101905, 8.532927, 8.556753, 8.166105, 7.480322, 6.7089033, 6.08751, 5.8059707, 5.950293, 6.4763885, 7.2235394, 7.9634995, 8.470219, 8.588899, 8.283284)
-style = ExtResource("3_ctait")
+style = ExtResource("3_mycp2")
 discharge = 12.0
-baked_segments = Array[ExtResource("4_j78uf")]([ExtResource("5_vqd8d")])
+baked_segments = Array[ExtResource("4_8kjc3")]([ExtResource("5_667ks")])
 
-[node name="Terrain" type="MeshInstance3D" parent="." unique_id=1474296874]
-mesh = ExtResource("6_swde4")
+[node name="Terrain" type="MeshInstance3D" parent="." unique_id=1126081976]
+mesh = ExtResource("6_vplvo")
 
-[node name="TerrainBody" type="StaticBody3D" parent="Terrain" unique_id=1534925077]
+[node name="TerrainBody" type="StaticBody3D" parent="Terrain" unique_id=34415757]
 
-[node name="Shape" type="CollisionShape3D" parent="Terrain/TerrainBody" unique_id=1431331105]
-shape = ExtResource("7_prib0")
+[node name="Shape" type="CollisionShape3D" parent="Terrain/TerrainBody" unique_id=2143989294]
+shape = ExtResource("7_eqe45")
 
-[node name="Rocks" type="Node3D" parent="." unique_id=297552616]
+[node name="Rocks" type="Node3D" parent="." unique_id=1601705091]
 
-[node name="Rock1" type="StaticBody3D" parent="Rocks" unique_id=616266677]
-transform = Transform3D(0.2936544, 0, -0.95591164, 0, 1, 0, 0.95591164, 0, 0.2936544, 4.5730023, -1.8265157, -10.865277)
+[node name="Rock1" type="StaticBody3D" parent="Rocks" unique_id=1209562025]
+transform = Transform3D(0.2936544, 0, -0.95591164, 0, 1, 0, 0.95591164, 0, 0.2936544, 4.5730023, -1.8366579, -10.865277)
 
-[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock1" unique_id=545019656]
+[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock1" unique_id=214112922]
 transform = Transform3D(0.22481446, 0, 0, 0, 0.22481446, 0, 0, 0, 0.22481446, 0, 0, 0)
-mesh = ExtResource("8_3smuy")
+mesh = ExtResource("8_8kol2")
 
-[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock1" unique_id=1843620778]
-shape = SubResource("ConvexPolygonShape3D_6dlwt")
+[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock1" unique_id=967387798]
+shape = SubResource("ConvexPolygonShape3D_ntsoa")
 
-[node name="Rock2" type="StaticBody3D" parent="Rocks" unique_id=1286124354]
-transform = Transform3D(0.10496511, 0, -0.9944759, 0, 1, 0, 0.9944759, 0, 0.10496511, 8.888693, -1.8358989, -23.715433)
+[node name="Rock2" type="StaticBody3D" parent="Rocks" unique_id=1911596519]
+transform = Transform3D(0.10496511, 0, -0.9944759, 0, 1, 0, 0.9944759, 0, 0.10496511, 8.888693, -1.8824538, -23.715433)
 
-[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock2" unique_id=1728120457]
+[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock2" unique_id=1127072261]
 transform = Transform3D(0.3071393, 0, 0, 0, 0.3071393, 0, 0, 0, 0.3071393, 0, 0, 0)
-mesh = ExtResource("9_bxvgl")
+mesh = ExtResource("9_4kv4w")
 
-[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock2" unique_id=899226110]
-shape = SubResource("ConvexPolygonShape3D_twr7b")
+[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock2" unique_id=33208417]
+shape = SubResource("ConvexPolygonShape3D_hkhn3")
 
-[node name="Rock3" type="StaticBody3D" parent="Rocks" unique_id=1598337836]
-transform = Transform3D(-0.9386263, 0, -0.34493575, 0, 1, 0, 0.34493575, 0, -0.9386263, 5.4414277, -2.6747212, -34.153297)
+[node name="Rock3" type="StaticBody3D" parent="Rocks" unique_id=161447982]
+transform = Transform3D(-0.9386263, 0, -0.34493575, 0, 1, 0, 0.34493575, 0, -0.9386263, 5.4414277, -2.6802278, -34.153297)
 
-[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock3" unique_id=208927650]
+[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock3" unique_id=2108697738]
 transform = Transform3D(0.53774273, 0, 0, 0, 0.53774273, 0, 0, 0, 0.53774273, 0, 0, 0)
-mesh = ExtResource("10_ote4m")
+mesh = ExtResource("10_a21mm")
 
-[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock3" unique_id=1743295685]
-shape = SubResource("ConvexPolygonShape3D_x8w11")
+[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock3" unique_id=1879237861]
+shape = SubResource("ConvexPolygonShape3D_20okg")
 
-[node name="Rock4" type="StaticBody3D" parent="Rocks" unique_id=1756956892]
-transform = Transform3D(-0.086086385, 0, -0.9962877, 0, 1, 0, 0.9962877, 0, -0.086086385, -1.2771292, 0.15665804, -42.600677)
+[node name="Rock4" type="StaticBody3D" parent="Rocks" unique_id=1945687667]
+transform = Transform3D(-0.086086385, 0, -0.9962877, 0, 1, 0, 0.9962877, 0, -0.086086385, -1.2771292, 0.23115598, -42.600677)
 
-[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock4" unique_id=522130385]
+[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock4" unique_id=1928502296]
 transform = Transform3D(0.70960045, 0, 0, 0, 0.70960045, 0, 0, 0, 0.70960045, 0, 0, 0)
-mesh = ExtResource("8_3smuy")
+mesh = ExtResource("8_8kol2")
 
-[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock4" unique_id=1189945115]
-shape = SubResource("ConvexPolygonShape3D_mh8mh")
+[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock4" unique_id=40623720]
+shape = SubResource("ConvexPolygonShape3D_bmors")
 
-[node name="Rock5" type="StaticBody3D" parent="Rocks" unique_id=2139231421]
-transform = Transform3D(0.37377632, 0, 0.9275189, 0, 1, 0, -0.9275189, 0, 0.37377632, -11.184347, 0.31547648, 7.586277)
+[node name="Rock5" type="StaticBody3D" parent="Rocks" unique_id=1137857363]
+transform = Transform3D(0.37377632, 0, 0.9275189, 0, 1, 0, -0.9275189, 0, 0.37377632, -11.184347, 0.36952996, 7.586277)
 
-[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock5" unique_id=1663120871]
+[node name="Mesh" type="MeshInstance3D" parent="Rocks/Rock5" unique_id=1997323196]
 transform = Transform3D(0.24631448, 0, 0, 0, 0.24631448, 0, 0, 0, 0.24631448, 0, 0, 0)
-mesh = ExtResource("11_y6p2l")
+mesh = ExtResource("11_soe60")
 
-[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock5" unique_id=661267918]
-shape = SubResource("ConvexPolygonShape3D_s3gex")
+[node name="Shape" type="CollisionShape3D" parent="Rocks/Rock5" unique_id=1753090027]
+shape = SubResource("ConvexPolygonShape3D_7rad0")
 
-[node name="Trees" type="MultiMeshInstance3D" parent="." unique_id=286047672]
-multimesh = ExtResource("12_n8crm")
+[node name="Trees" type="MultiMeshInstance3D" parent="." unique_id=1709029009]
+multimesh = ExtResource("12_sdpbk")
 
-[node name="Grass" type="MultiMeshInstance3D" parent="." unique_id=318433709]
+[node name="Grass" type="MultiMeshInstance3D" parent="." unique_id=1358165226]
 cast_shadow = 0
-multimesh = ExtResource("13_5wyyg")
+multimesh = ExtResource("13_t6ooq")
 
-[node name="Reeds" type="MultiMeshInstance3D" parent="." unique_id=1778892666]
+[node name="Reeds" type="MultiMeshInstance3D" parent="." unique_id=2117330937]
 cast_shadow = 0
-multimesh = ExtResource("14_dca5h")
+multimesh = ExtResource("14_dcfps")
 
-[node name="Camera" type="Camera3D" parent="." unique_id=1020234944]
+[node name="Camera" type="Camera3D" parent="." unique_id=755251711]
 transform = Transform3D(-0.7955131, -0.049605723, 0.60390246, 0, 0.9966433, 0.08186622, -0.6059364, 0.06512565, -0.7928428, 17.949581, 2.3349168, -22.013494)
-compositor = SubResource("Compositor_jxlhf")
+compositor = SubResource("Compositor_pf5fw")
 current = true
 fov = 62.0
-script = ExtResource("16_a3mb2")
+script = ExtResource("16_hw1nc")
 
-[node name="LogSpawn" type="Marker3D" parent="." unique_id=884374656]
+[node name="LogSpawn" type="Marker3D" parent="." unique_id=1063441844]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.336058, 0.8202361, -54.3364)
 
-[node name="Log1" type="RigidBody3D" parent="." unique_id=924956519 instance=ExtResource("17_3sjau")]
-transform = Transform3D(0.94654477, 0, 0.3225726, 0, 1, 0, -0.3225726, 0, 0.94654477, 9.133297, 0.3274364, -40.497456)
+[node name="Log1" type="RigidBody3D" parent="." unique_id=1439467383 instance=ExtResource("17_fqert")]
+transform = Transform3D(-0.9683202, 0, -0.2497118, 0, 1, 0, 0.2497118, 0, -0.9683202, 9.133297, 0.3274364, -40.497456)
 collision_layer = 2
 collision_mask = 3
 mass = 9.0
 can_sleep = false
 linear_velocity = Vector3(0, -1.1376325, 0)
 
-[node name="Log2" type="RigidBody3D" parent="." unique_id=1829151850 instance=ExtResource("17_3sjau")]
-transform = Transform3D(0.6337068, 0, 0.77357334, 0, 1, 0, -0.77357334, 0, 0.6337068, 7.704118, 0.31128037, -26.42965)
+[node name="Log2" type="RigidBody3D" parent="." unique_id=1392604940 instance=ExtResource("17_fqert")]
+transform = Transform3D(-0.16868699, 0, 0.9856697, 0, 1, 0, -0.9856697, 0, -0.16868699, 7.704118, 0.31128037, -26.42965)
 collision_layer = 2
 collision_mask = 3
 mass = 9.0
 can_sleep = false
 linear_velocity = Vector3(0, -1.1376325, 0)
 
-[node name="Log3" type="RigidBody3D" parent="." unique_id=1147461438 instance=ExtResource("17_3sjau")]
-transform = Transform3D(-0.8775575, 0, -0.47947147, 0, 1, 0, 0.47947147, 0, -0.8775575, 0.45265198, 0.28997448, -9.496661)
+[node name="Log3" type="RigidBody3D" parent="." unique_id=1180757891 instance=ExtResource("17_fqert")]
+transform = Transform3D(0.99745715, 0, -0.07126943, 0, 1, 0, 0.07126943, 0, 0.99745715, 0.45265198, 0.28997448, -9.496661)
 collision_layer = 2
 collision_mask = 3
 mass = 9.0
 can_sleep = false
 linear_velocity = Vector3(0, -1.1376325, 0)
 
-[node name="UI" type="CanvasLayer" parent="." unique_id=1202464314]
-script = ExtResource("18_3j0db")
+[node name="UI" type="CanvasLayer" parent="." unique_id=158791990]
+script = ExtResource("18_1kfh5")
 title = "07 - Slow lowland river"
 description = "A wide, slow, silty river: the 'lowland' style (turbidity, sediment colour, surface slicks).
 Press 5 to compare: peat is clear but tea-stained, muddy is a flood. No re-bake needed."

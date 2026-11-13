@@ -1,33 +1,33 @@
 [gd_resource type="ShaderMaterial" format=3]
 
-[ext_resource type="Shader" path="res://examples/shared/terrain.gdshader" id="1_nmiiq"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/ganges_river_pebbles_diff.jpg" id="2_mu3kw"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/ganges_river_pebbles_nor.jpg" id="3_qiq54"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/ganges_river_pebbles_rough.jpg" id="4_w6kyu"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forrest_ground_01_diff.jpg" id="5_bwps4"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forrest_ground_01_nor.jpg" id="6_whkm7"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forrest_ground_01_rough.jpg" id="7_cgmi4"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/mossy_rock_diff.jpg" id="8_dgq5m"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/mossy_rock_nor.jpg" id="9_lv5qi"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/mossy_rock_rough.jpg" id="10_4f6a6"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/river_small_rocks_diff.jpg" id="11_c1ehs"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/river_small_rocks_nor.jpg" id="12_8n45o"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forest_ground_04_diff.jpg" id="13_k1r2l"]
-[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forest_ground_04_nor.jpg" id="14_x1lwd"]
+[ext_resource type="Shader" path="res://examples/shared/terrain.gdshader" id="1_57g65"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/ganges_river_pebbles_diff.jpg" id="2_ujeem"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/ganges_river_pebbles_nor.jpg" id="3_at1xm"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/ganges_river_pebbles_rough.jpg" id="4_ap1ha"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forrest_ground_01_diff.jpg" id="5_swv0d"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forrest_ground_01_nor.jpg" id="6_xuxfd"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forrest_ground_01_rough.jpg" id="7_428t8"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/mossy_rock_diff.jpg" id="8_mvn0y"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/mossy_rock_nor.jpg" id="9_mymhd"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/mossy_rock_rough.jpg" id="10_u3767"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/river_small_rocks_diff.jpg" id="11_kw2gn"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/river_small_rocks_nor.jpg" id="12_vmtcf"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forest_ground_04_diff.jpg" id="13_e3ga0"]
+[ext_resource type="Texture2D" path="res://examples/shared/polyhaven/textures/forest_ground_04_nor.jpg" id="14_2k6t8"]
 
 [resource]
 render_priority = 0
-shader = ExtResource("1_nmiiq")
-shader_parameter/meadow_albedo = ExtResource("5_bwps4")
-shader_parameter/meadow_normal = ExtResource("6_whkm7")
-shader_parameter/meadow_rough = ExtResource("7_cgmi4")
-shader_parameter/soil_albedo = ExtResource("13_k1r2l")
-shader_parameter/soil_normal = ExtResource("14_x1lwd")
-shader_parameter/bar_albedo = ExtResource("2_mu3kw")
-shader_parameter/bar_normal = ExtResource("3_qiq54")
-shader_parameter/bar_rough = ExtResource("4_w6kyu")
-shader_parameter/silt_albedo = ExtResource("11_c1ehs")
-shader_parameter/silt_normal = ExtResource("12_8n45o")
-shader_parameter/rock_albedo = ExtResource("8_dgq5m")
-shader_parameter/rock_normal = ExtResource("9_lv5qi")
-shader_parameter/rock_rough = ExtResource("10_4f6a6")
+shader = ExtResource("1_57g65")
+shader_parameter/meadow_albedo = ExtResource("5_swv0d")
+shader_parameter/meadow_normal = ExtResource("6_xuxfd")
+shader_parameter/meadow_rough = ExtResource("7_428t8")
+shader_parameter/soil_albedo = ExtResource("13_e3ga0")
+shader_parameter/soil_normal = ExtResource("14_2k6t8")
+shader_parameter/bar_albedo = ExtResource("2_ujeem")
+shader_parameter/bar_normal = ExtResource("3_at1xm")
+shader_parameter/bar_rough = ExtResource("4_ap1ha")
+shader_parameter/silt_albedo = ExtResource("11_kw2gn")
+shader_parameter/silt_normal = ExtResource("12_vmtcf")
+shader_parameter/rock_albedo = ExtResource("8_mvn0y")
+shader_parameter/rock_normal = ExtResource("9_mymhd")
+shader_parameter/rock_rough = ExtResource("10_u3767")
