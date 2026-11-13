@@ -4,7 +4,7 @@
 extends Node3D
 ## Look-dev capture tool. Loads a scene, waits for bakes, renders shots.
 ## Run: godot --path . res://tools/screenshot.tscn -- scene=res://... \
-##        shot=name:px,py,pz:lx,ly,lz [shot=...] [wait=3] [debug=N] [style=name] [player=x,y,z]
+##        shot=name:px,py,pz:lx,ly,lz [shot=...] [wait=3] [debug=N] [style=name] [player=x,y,z] [hide=NodePath]
 
 var scene: Node
 var cam: Camera3D
@@ -12,6 +12,7 @@ var _ripples: Array[Vector3] = []
 var _quality := -1
 var _storm := -1.0
 var _t := 0.0
+var _hide: Array[String] = []
 
 
 func _process(delta: float) -> void:
@@ -49,6 +50,8 @@ func _ready() -> void:
 		elif a.begins_with("ripple="):
 			var r := a.substr(7).split(",")
 			_ripples.append(Vector3(float(r[0]), float(r[1]), float(r[2])))
+		elif a.begins_with("hide="):
+			_hide.append(a.substr(5))
 		elif a.begins_with("storm="):
 			_storm = float(a.substr(6))
 		elif a.begins_with("quality="):
@@ -90,6 +93,10 @@ func _run(shots: Array, wait: float, debug: int, style: String) -> void:
 			break
 		tries += 1
 		await get_tree().process_frame
+	for h in _hide:
+		var hn := scene.get_node_or_null(h) as Node3D
+		if hn != null:
+			hn.visible = false
 	if _quality >= 0:
 		get_tree().root.get_node("WaterManager").quality = _quality
 	if _storm >= 0.0:
