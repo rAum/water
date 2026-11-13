@@ -230,6 +230,14 @@ void vertex() {
 		float wob = textureLod(fall_tex, vec2(UV2.x * 0.21 + (1.0 - COLOR.a) * 0.41, ft_v * 0.3), 0.0).g - 0.5;
 		lift += wob * 0.2 * pow(COLOR.b, 1.3);
 	}
+	// columns of a falling sheet wander apart the longer they fly (low
+	// frequency: read once per vertex, not per pixel)
+	v_wander = 0.0;
+	if (CUSTOM0.x > 0.0) {
+		float ft_w = (CUSTOM0.x - TIME * (1.0 - 0.08 * (1.0 - COLOR.a))) * FALL_TEX_RATE;
+		float drift = textureLod(fall_tex, vec2(UV2.x * 0.07 + 0.31, ft_w * 0.21), 0.0).g - 0.5;
+		v_wander = drift * 1.1 * CUSTOM0.x * CUSTOM0.x;
+	}
 	// the pool heaves where a fall lands in it
 	if (CUSTOM0.w > 0.001 && COLOR.b < 0.001) {
 		float hv = textureLod(fall_tex, UV2 * vec2(0.23, 0.19) + vec2(0.0, -TIME * 0.13), 0.0).g - 0.5;
@@ -694,10 +702,8 @@ void fragment() {
 			// lip, long fast streaks lower down.
 			// (the lower surface runs slightly behind the upper one: parallax)
 			float ft = (v_flight.x - TIME * (1.0 - 0.08 * lower)) * FALL_TEX_RATE;
-			// columns wander apart as they fall (more the longer they fly)
-			float drift = texture(fall_tex, vec2(v_metric.x * 0.07 + 0.31, ft * 0.21)).g - 0.5;
-			float wander = drift * 1.1 * v_flight.x * v_flight.x;
-			vec2 fuv = vec2((v_metric.x + wander) * 0.29 + lower * 0.43, ft);
+			// columns wander apart as they fall (v_wander, from the vertices)
+			vec2 fuv = vec2((v_metric.x + v_wander) * 0.29 + lower * 0.43, ft);
 			vec4 f1 = texture(fall_tex, fuv);
 			vec4 f2 = texture(fall_tex, fuv * vec2(2.3, 1.7) + vec2(0.37, 0.21));
 			// strands inside surges
@@ -733,17 +739,21 @@ void fragment() {
 			// clock, not riding down with the water).
 			// (metres above the pool: fallen = drop * progress^2)
 			float above = v_flight.z * (1.0 / max(v_fall_t * v_fall_t, 0.01) - 1.0);
-			vec4 fb1 = texture(fall_tex, vec2(v_metric.x * 0.23 + 0.13, above * 0.21 + TIME * 0.09));
-			vec4 fb2 = texture(fall_tex, vec2(v_metric.x * 0.53 + 0.57, above * 0.47 + TIME * 0.23));
-			float heave = (fb1.g - 0.5) * 0.5 + (fb2.g - 0.5) * 0.3;
-			// (v_plunge: the strip where the sheet's foot meets the pool,
-			// whose fall progress blends back to 0, is all boil)
-			float boil = max((1.0 - smoothstep(0.2, 0.75, above + heave)) * smoothstep(0.5, 0.8, v_fall_t) * fall_amt,
-				smoothstep(0.3, 0.8, v_plunge));
-			float boil_d = clamp(fb1.g * 0.5 + fb2.b * 0.5 + 0.2, 0.0, 1.0);
-			fall_cover = mix(fall_cover, smoothstep(0.15, 0.45, boil_d), boil);
-			fall_white = mix(fall_white, smoothstep(0.1, 0.6, boil_d), boil);
-			fall_dens = mix(fall_dens, boil_d, boil);
+			// (only the last metre or so of the sheet can boil: the rest
+			// skips the two reads)
+			if ((above < 1.2 && v_fall_t > 0.5) || v_plunge > 0.001) {
+				vec4 fb1 = texture(fall_tex, vec2(v_metric.x * 0.23 + 0.13, above * 0.21 + TIME * 0.09));
+				vec4 fb2 = texture(fall_tex, vec2(v_metric.x * 0.53 + 0.57, above * 0.47 + TIME * 0.23));
+				float heave = (fb1.g - 0.5) * 0.5 + (fb2.g - 0.5) * 0.3;
+				// (v_plunge: the strip where the sheet's foot meets the pool,
+				// whose fall progress blends back to 0, is all boil)
+				float boil = max((1.0 - smoothstep(0.2, 0.75, above + heave)) * smoothstep(0.5, 0.8, v_fall_t) * fall_amt,
+					smoothstep(0.3, 0.8, v_plunge));
+				float boil_d = clamp(fb1.g * 0.5 + fb2.b * 0.5 + 0.2, 0.0, 1.0);
+				fall_cover = mix(fall_cover, smoothstep(0.15, 0.45, boil_d), boil);
+				fall_white = mix(fall_white, smoothstep(0.1, 0.6, boil_d), boil);
+				fall_dens = mix(fall_dens, boil_d, boil);
+			}
 			// A body in the fall: the water it catches does not fall on, so
 			// a gap opens below it and travels down with the water; its
 			// rim is torn white where the sheet splits around the body.

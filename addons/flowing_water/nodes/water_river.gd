@@ -799,6 +799,7 @@ const FALL_HIT_DISTANCE := 40.0
 var _fall_hits: WaterFallHits
 var _fall_splash: GPUParticles3D
 var _fall_hit_range := Vector2(-1.0, -1.0)
+var _fall_hit_was_on := true
 
 
 func _fall_line(fi: int) -> Array:
@@ -852,6 +853,9 @@ func _update_fall_hits(delta: float) -> void:
 		return
 	if _fall_hits == null:
 		_fall_hits = WaterFallHits.new()
+	elif not _fall_hits.active and not _fall_hit_was_on \
+			and get_tree().get_first_node_in_group(FALL_BLOCKER_GROUP) == null:
+		return
 	_fall_hits.step(delta)
 	var inv := global_transform.affine_inverse()
 	var cam_l := inv * cam.global_position
@@ -885,14 +889,21 @@ func _update_fall_hits(delta: float) -> void:
 					contact_dir = _fall_line(best)[0][1]
 		_fall_hit_range = Vector2(float(f[0]) - 1.0, float(f[1]) + 0.5)
 	_fall_hits.upload()
-	# (every frame: a quality or style change rebuilds the materials)
+	# the shader only needs the clock while there is a gap to draw
+	var on := _fall_hits.active
+	if not on and not _fall_hit_was_on:
+		_update_fall_splash(contact, contact_dir)
+		return
+	_fall_hit_was_on = on
 	for m in _all_materials():
-		m.set_shader_parameter("fall_hit_tex", _fall_hits.texture)
-		m.set_shader_parameter("fall_hit_rows", float(WaterFallHits.ROWS))
-		m.set_shader_parameter("fall_hit_dt", WaterFallHits.ROW_DT)
+		# (a quality or style change rebuilds the materials: bind anew)
+		if m.get_shader_parameter("fall_hit_tex") != _fall_hits.texture:
+			m.set_shader_parameter("fall_hit_tex", _fall_hits.texture)
+			m.set_shader_parameter("fall_hit_rows", float(WaterFallHits.ROWS))
+			m.set_shader_parameter("fall_hit_dt", WaterFallHits.ROW_DT)
 		m.set_shader_parameter("fall_hit_s", _fall_hit_range)
 		m.set_shader_parameter("fall_hit_head", _fall_hits.head)
-		m.set_shader_parameter("fall_hit_on", 1.0 if _fall_hits.active else 0.0)
+		m.set_shader_parameter("fall_hit_on", 1.0 if on else 0.0)
 	_update_fall_splash(contact, contact_dir)
 
 

@@ -103,8 +103,9 @@ void process() {
 		VELOCITY.y -= 9.8 * DELTA;
 	} else {
 		VELOCITY = mix(VELOCITY, wind + vec3(0.0, 0.05, 0.0), DELTA * 0.6);
-		// mist grows as it ages
-		float g = 1.0 + DELTA * 0.45;
+		// mist grows as it ages (up to ~2 m: past that a puff only adds
+		// overdraw, not mist)
+		float g = length(TRANSFORM[0].xyz) < 2.0 ? 1.0 + DELTA * 0.45 : 1.0;
 		TRANSFORM[0].xyz *= g;
 		TRANSFORM[1].xyz *= g;
 		TRANSFORM[2].xyz *= g;

@@ -163,25 +163,18 @@ func _make_draw_mesh(kind: float) -> QuadMesh:
 		dm.shader = load("res://addons/flowing_water/render/water_droplet.gdshader")
 		quad.material = dm
 		return quad
+	if kind > 0.5:
+		# mist and impact spray: big, stacked many deep - a cheap shader
+		# lit from the sun's direction (see water_mist.gdshader)
+		var mm := ShaderMaterial.new()
+		mm.shader = load("res://addons/flowing_water/render/water_mist.gdshader")
+		mm.set_shader_parameter("puff_tex", _soft_circle())
+		mm.set_shader_parameter("soft_distance", 0.5 if kind < 1.5 else 0.3)
+		quad.material = mm
+		return quad
 	var m := StandardMaterial3D.new()
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	if kind > 0.5:
-		# mist and impact spray are clouds of fine drops: lit by the sun
-		# (darker in shade) and glowing when the sun is behind them -
-		# drops scatter light forward
-		m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		m.backlight_enabled = true
-		m.backlight = Color(0.75, 0.78, 0.8)
-		m.roughness = 1.0
-		m.metallic_specular = 0.0
-		m.emission_enabled = true
-		m.emission = Color(0.16, 0.18, 0.2)   # sky light from all around
-		# a camera standing in the mist must not look through a veil of
-		# sprites stacked on its lens: puffs fade out as they come close
-		m.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
-		m.distance_fade_min_distance = 0.6
-		m.distance_fade_max_distance = 3.0
 	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	# without this the particle's own scale is dropped and every droplet
 	# is drawn as a 1 m quad
@@ -191,10 +184,26 @@ func _make_draw_mesh(kind: float) -> QuadMesh:
 	m.no_depth_test = false
 	# soft particles: fade where the sprite meets water, rocks or banks
 	m.proximity_fade_enabled = true
-	m.proximity_fade_distance = 0.5 if (kind > 0.5 and kind < 1.5) else (0.3 if kind > 2.5 else 0.08)
-	m.disable_receive_shadows = kind < 0.5
+	m.proximity_fade_distance = 0.08
+	m.disable_receive_shadows = true
 	quad.material = m
 	return quad
+
+
+## The mist shader is unlit: hand it the sun's direction and colour.
+func _update_light(mgr: Node) -> void:
+	var sun: DirectionalLight3D = mgr._find_sun(0.4) if mgr != null and mgr.has_method("_find_sun") else null
+	var dir := Vector3(0.3, 0.8, 0.2)
+	var col := Color(1.0, 0.97, 0.9)
+	if sun != null:
+		dir = sun.global_transform.basis.z.normalized()
+		col = sun.light_color * minf(sun.light_energy, 2.0)
+	for em: GPUParticles3D in [_mist, _impact]:
+		if em == null or not ((em.draw_pass_1 as QuadMesh).material is ShaderMaterial):
+			continue
+		var m := (em.draw_pass_1 as QuadMesh).material as ShaderMaterial
+		m.set_shader_parameter("sun_dir", dir)
+		m.set_shader_parameter("sun_color", Vector3(col.r, col.g, col.b) * 0.75)
 
 
 func _process(delta: float) -> void:
@@ -208,6 +217,7 @@ func _process(delta: float) -> void:
 	var mgr := get_tree().root.get_node_or_null("WaterManager")
 	var amount: float = mgr.spray_amount() if mgr != null else 1.0
 	var wind: Vector3 = mgr.get_wind(global_position) if mgr != null else Vector3(0.4, 0, 0.3)
+	_update_light(mgr)
 	for em: GPUParticles3D in [_spray, _mist, _fall, _impact]:
 		if em == null:
 			continue

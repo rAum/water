@@ -133,7 +133,8 @@ varying vec3 v_norm0;       // base surface normal
 varying float v_fade;       // junction extension fade (1 = solid water)
 varying float v_fall_t;     // 0 at a waterfall's lip .. 1 at its foot (0 off falls)
 varying vec3 v_flight;
-varying float v_plunge;    // 1 where a fall lands in the pool, fading downstream (CUSTOM0.w)     // falls: seconds since the lip, speed (m/s), metres fallen (CUSTOM0)
+varying float v_plunge;
+varying float v_wander;    // falls: sideways wander of a column (metres)    // 1 where a fall lands in the pool, fading downstream (CUSTOM0.w)     // falls: seconds since the lip, speed (m/s), metres fallen (CUSTOM0)
 varying float v_shell;      // 1 = upper surface, 0 = lower surface of a falling sheet
 
 const float WPI = 3.14159265;
