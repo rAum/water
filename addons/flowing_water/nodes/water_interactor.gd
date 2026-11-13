@@ -97,7 +97,7 @@ func _physics_process(delta: float) -> void:
 		_ripple_accum += delta * planar.length()
 		if _ripple_accum > 0.35:
 			_ripple_accum = 0.0
-			mgr.add_ripple(feet, 0.02 + minf(planar.length() * 0.01, 0.05), radius)
+			mgr.add_ripple(feet, 0.015 + minf(planar.length() * 0.008, 0.025), radius)
 	else:
 		# standing still in a current still disturbs the surface a little
 		if speed > 0.8:
@@ -114,7 +114,7 @@ func _set_in_water(now: bool, speed: float) -> void:
 		var mgr := get_tree().root.get_node_or_null("WaterManager")
 		if mgr != null and speed > 1.0:
 			# entry ring and splash
-			mgr.add_ripple(global_position, clampf(speed * 0.03, 0.03, 0.2), radius * 2.0)
+			mgr.add_ripple(global_position, clampf(speed * 0.02, 0.02, 0.1), radius * 2.0)
 	elif not now and _was_in_water:
 		exited_water.emit()
 	_was_in_water = now

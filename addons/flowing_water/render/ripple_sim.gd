@@ -14,6 +14,11 @@ extends Node
 const GRID_WORLD_SIZE := 24.0
 const FIXED_DT := 1.0 / 60.0
 const SLEEP_AFTER := 4.0
+## Over the last second before the simulation sleeps the waves are damped
+## out, so switching it off never makes the surface jump.
+const FADE_TIME := 1.0
+const DAMP := 0.996
+const FADE_DAMP := 0.93
 const MAX_INJECTIONS := 32
 
 var focus_position := Vector3.ZERO
@@ -38,6 +43,7 @@ var _accum := 0.0
 var _awake_time := 0.0
 var _pending_inj: Array[Vector4] = []
 var _active := false
+var _clear_next := false
 
 
 func _ready() -> void:
@@ -89,7 +95,12 @@ func _process(delta: float) -> void:
 			_active = false
 			_publish_inactive()
 		return
+	if not _active:
+		# waking up: start from calm water, never from the waves that were
+		# left when it went to sleep (they would pop back in)
+		_clear_next = true
 	_active = true
+	var damp := DAMP if _awake_time > FADE_TIME else FADE_DAMP
 	# fixed timestep; the frame delta is clamped so a hitch never blows it up
 	_accum += minf(delta, 0.1)
 	var steps := 0
@@ -109,8 +120,10 @@ func _process(delta: float) -> void:
 	var map_tex: ImageTexture = mgr.map_texture()
 	if map_tex == null:
 		return
+	var clear := _clear_next
+	_clear_next = false
 	RenderingServer.call_on_render_thread(
-		_render_steps.bind(steps, new_origin, inj, rect, map_tex.get_rid()))
+		_render_steps.bind(steps, new_origin, inj, rect, map_tex.get_rid(), damp, clear))
 	_origin = new_origin
 	RenderingServer.global_shader_parameter_set("flowing_water_ripple_rect",
 		Vector4(new_origin.x, new_origin.y, GRID_WORLD_SIZE, float(_n)))
@@ -181,12 +194,15 @@ func _init_rd() -> void:
 
 
 func _render_steps(steps: int, new_origin: Vector2, inj: Array[Vector4],
-		map_rect: Vector4, map_tex_rid: RID) -> void:
+		map_rect: Vector4, map_tex_rid: RID, damp: float, clear: bool) -> void:
 	if not _initialized_rd:
 		return
 	var map_rd_tex := RenderingServer.texture_get_rd_texture(map_tex_rid)
 	if not map_rd_tex.is_valid():
 		return
+	if clear:
+		for t in _tex:
+			_rd.texture_clear(t, Color(0, 0, 0, 0), 0, 1, 0, 1)
 	# upload injections (applied only on the first step this frame)
 	var inj_f := PackedFloat32Array()
 	inj_f.resize(MAX_INJECTIONS * 4)
@@ -231,7 +247,7 @@ func _render_steps(steps: int, new_origin: Vector2, inj: Array[Vector4],
 		var push := PackedFloat32Array([
 			origin_old.x, origin_old.y, new_origin.x, new_origin.y,
 			map_rect.x, map_rect.y, map_rect.z, map_rect.w,
-			GRID_WORLD_SIZE, texel, FIXED_DT, 0.9975,
+			GRID_WORLD_SIZE, texel, FIXED_DT, damp,
 		]).to_byte_array()
 		push.append_array(PackedInt32Array([_n, inj.size() if s == 0 else 0]).to_byte_array())
 		push.append_array(PackedFloat32Array([0.0, 0.0]).to_byte_array())

@@ -20,6 +20,9 @@ const STEEP_SLOPE := 0.15
 const MESH_STEP_FLAT := 0.5
 const MESH_STEP_STEEP := 0.25
 const MESH_STEP_FALL := 0.1
+## Metres from a pond junction within which the ribbon is checked against
+## the pond (cross-fade and lift).
+const JUNCTION_REACH := 14.0
 
 ## Half width in metres at each curve point.
 @export var widths: PackedFloat32Array = []:
@@ -143,7 +146,8 @@ func _plunge_ripples(delta: float) -> void:
 			continue
 		var pt := data.mist_points[randi() % data.mist_points.size()]
 		if cam.global_position.distance_to(pt) < 30.0:
-			mgr.add_ripple(pt, 0.03 + randf() * 0.03, 0.4)
+			# (rings, not a churned trench: the sim adds them up)
+			mgr.add_ripple(pt, 0.012 + randf() * 0.012, 0.4)
 
 
 func _on_curve_changed() -> void:
@@ -344,6 +348,9 @@ func rebuild_mesh() -> void:
 	if curve == null or curve.get_baked_length() < 1.0:
 		return
 	var length := curve.get_baked_length()
+	for j in [_junction_a, _junction_b]:
+		if j != null and is_instance_valid(j) and j.has_method("refresh_cache"):
+			j.refresh_cache()
 
 	# adaptive row positions: 0.5 m, 0.25 m above 15 % slope, 0.1 m on falls
 	var row_s := PackedFloat32Array()
@@ -357,9 +364,11 @@ func rebuild_mesh() -> void:
 			step = MESH_STEP_FALL
 		elif slope > STEEP_SLOPE:
 			step = MESH_STEP_STEEP
-		if step > 0.2 and not _fall_near(s + 0.5).is_empty():
-			# columns can leave the ground a little above the lip
-			step = 0.2
+		if not _fall_near(s + 0.5).is_empty():
+			# columns leave the ground up to a few metres above the lip, each
+			# at its own row: the brink runs across the ribbon at a slant, and
+			# only fine rows bend the sheet over it without a sawtooth
+			step = MESH_STEP_FALL
 		s = minf(s + step, length)
 		row_s.append(s)
 
@@ -443,9 +452,23 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 	state.resize(ax * rows)
 	var v0 := _brink_speed()
 	var p := 0
+	var length := curve.get_baked_length()
+	var gt := global_transform if is_inside_tree() else transform
+	var space: PhysicsDirectSpaceState3D = null
+	if is_inside_tree() and get_world_3d() != null:
+		space = get_world_3d().direct_space_state
 	for r in rows:
 		var s := row_s[first + r]
 		var f := frame_at(s)
+		# where this river runs into or out of a pond, the ribbon cross-fades
+		# with the pond's surface (only over it) and rides just above it
+		var junction: Node = null
+		if _junction_b != null and is_instance_valid(_junction_b) and length - s < JUNCTION_REACH:
+			junction = _junction_b
+		elif _junction_a != null and is_instance_valid(_junction_a) and s < JUNCTION_REACH:
+			junction = _junction_a
+		if junction != null and not junction.has_method("overlap_weights"):
+			junction = null
 		var c: Vector3 = f["pos"]
 		var side: Vector3 = f["side"]
 		var dir: Vector3 = f["dir"]
@@ -467,6 +490,23 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 		var along := 0.0     # metres the row's centre is past the lip (negative above it)
 		if not fall.is_empty():
 			along = float(f["fall_t"]) * float(fall[5]) if s > fall[0] else s - float(fall[0])
+		# Where each column leaves the brink (lead) and how far it is thrown
+		# vary from cell to cell in the bake; taken raw, neighbouring columns
+		# fall at different rates and the sheet folds into teeth. Smoothed
+		# across the ribbon (the brink a gentle curve, the throw a broad
+		# swell), every column bends over the lip like its neighbours.
+		var row_lead := PackedFloat32Array()
+		var row_throw := PackedFloat32Array()
+		if not fall.is_empty() and has_cols:
+			row_lead.resize(ax)
+			row_throw.resize(ax)
+			var jn0 := float(clampi(roundi(fj), 0, data.rows - 1))
+			for i in ax:
+				var fi0 := float(i) / float(ax - 1) * float(cells_across) - 0.5
+				row_lead[i] = data.sample_array(data.fall_lead, fi0, jn0)
+				row_throw[i] = clampf(data.sample_array(data.fall_throw, fi0, jn0), 0.4, 1.0)
+			row_lead = _smooth_across(row_lead, 3)
+			row_throw = _smooth_across(row_throw, 9)
 		for i in ax:
 			var u := float(i) / float(ax - 1)
 			var d := -hw + u * 2.0 * hw
@@ -480,11 +520,17 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 				var throw := 1.0
 				var fi := u * float(cells_across) - 0.5
 				if has_cols:
-					var jn := float(clampi(roundi(fj), 0, data.rows - 1))
-					lead = data.sample_array(data.fall_lead, fi, jn)
+					lead = row_lead[i]
 					wet = smoothstep(0.1, 0.7, data.sample_array(data.fall_wet, fi, fj))
-					throw = clampf(data.sample_array(data.fall_throw, fi, jn), 0.4, 1.0)
+					throw = row_throw[i]
 				var x := along + lead
+				# A rock standing on the brink parts the sheet: the bake
+				# fills the rock's own cells with the water around it (no
+				# holes in the river), but where the water goes over the
+				# edge that fill would be drawn as a white film across the
+				# rock's lower ledges.
+				if has_cols and x > -0.25 and data.obstacle.size() == data.cells_across * data.rows:
+					wet *= 1.0 - smoothstep(0.35, 0.8, _sample_bytes(data, data.obstacle, fi, fj))
 				var run: float = float(fall[5]) * throw
 				var drop: float = float(fall[2]) - float(fall[3])
 				if s > fall[0]:
@@ -526,6 +572,21 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 			# in the air the ribbon only exists where there is water: red
 			# fades it out past the edges of the sheet
 			col[p] = Color(wet, 0.0, ft)
+			# A sheet whose arc meets a rock (one standing in the pool under
+			# the fall) breaks on it: it ends there instead of skimming a
+			# finger above the rock's top, where its white would show as
+			# slivers on the stone.
+			if state[p] == 1 and ft > 0.2 and space != null:
+				var wp := gt * pos[p]
+				var ray := PhysicsRayQueryParameters3D.create(
+					wp + Vector3.UP * 0.6, wp + Vector3.DOWN * 4.0, collision_mask)
+				var hit := space.intersect_ray(ray)
+				if not hit.is_empty():
+					col[p].r *= smoothstep(0.04, 0.2, wp.y - (hit["position"] as Vector3).y)
+			if junction != null:
+				var jw: Vector2 = junction.overlap_weights(gt * pos[p], hw - absf(d))
+				col[p].r *= jw.x
+				col[p].g = jw.y
 			p += 1
 	# Columns land at different places, so along the foot of the fall a
 	# vertex still in the air has neighbours already on the pool. Those are
@@ -577,11 +638,20 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 				if thick[q] <= 0.0 and thick[q + 1] <= 0.0 and thick[q + ax] <= 0.0 and thick[q + ax + 1] <= 0.0:
 					continue
 				var a := back_first + br * ax + i
-				idx.append_array([a, a + 1, a + ax, a + 1, a + ax + 1, a + ax])
+				if absf(pos[a].y - pos[a + ax + 1].y) < absf(pos[a + 1].y - pos[a + ax].y) - 0.002:
+					idx.append_array([a, a + ax + 1, a + ax, a, a + 1, a + ax + 1])
+				else:
+					idx.append_array([a, a + 1, a + ax, a + 1, a + ax + 1, a + ax])
 	for r in rows - 1:
 		for i in ax - 1:
 			var a := r * ax + i
-			idx.append_array([a, a + ax, a + 1, a + 1, a + ax, a + ax + 1])
+			# split each quad along the diagonal whose ends lie at the more
+			# similar height: across a slanted brink that diagonal follows the
+			# bend, and the quad does not fold into a tooth
+			if absf(pos[a].y - pos[a + ax + 1].y) < absf(pos[a + 1].y - pos[a + ax].y) - 0.002:
+				idx.append_array([a, a + ax, a + ax + 1, a, a + ax + 1, a + 1])
+			else:
+				idx.append_array([a, a + ax, a + 1, a + 1, a + ax, a + ax + 1])
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = pos
@@ -604,6 +674,39 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 	add_child(mi, false, Node.INTERNAL_MODE_BACK)
 	_chunks.append(mi)
 	_chunk_segments.append(_segment_of(row_s[first]))
+
+
+## Bilinear sample of a per-cell byte mask (0/1) as a float.
+static func _sample_bytes(data: WaterData, arr: PackedByteArray, fi: float, fj: float) -> float:
+	fi = clampf(fi, 0.0, float(data.cells_across) - 1.001)
+	fj = clampf(fj, 0.0, float(data.rows) - 1.001)
+	var i := int(fi)
+	var j := int(fj)
+	var tx := fi - float(i)
+	var tz := fj - float(j)
+	var k := j * data.cells_across + i
+	var a := float(arr[k]) * (1.0 - tx) + float(arr[k + 1]) * tx
+	var b := float(arr[k + data.cells_across]) * (1.0 - tx) + float(arr[k + data.cells_across + 1]) * tx
+	return a * (1.0 - tz) + b * tz
+
+
+## Box-smooths a row of per-column values (radius in columns), twice: a
+## tent filter that keeps the row's ends in place.
+static func _smooth_across(src: PackedFloat32Array, radius: int) -> PackedFloat32Array:
+	var cur := src
+	var n := src.size()
+	for pass_n in 2:
+		var out := PackedFloat32Array()
+		out.resize(n)
+		for i in n:
+			var sum := 0.0
+			var cnt := 0.0
+			for k in range(maxi(i - radius, 0), mini(i + radius, n - 1) + 1):
+				sum += cur[k]
+				cnt += 1.0
+			out[i] = sum / cnt
+		cur = out
+	return cur
 
 
 ## The waterfall section a row belongs to: on its arc, or within the few
@@ -689,19 +792,27 @@ func prepare_bake_data(seg: int) -> WaterData:
 		data.row_slope[j] = maxf(f["slope"], 0.0)
 		data.row_fall_t[j] = f["fall_t"]
 		data.row_cell_width[j] = 2.0 * hw / float(cells_across)
+		var cw := data.row_cell_width[j]
 		for i in cells_across:
-			var d := -hw + (float(i) + 0.5) * data.row_cell_width[j]
+			var d := -hw + (float(i) + 0.5) * cw
 			var cell_pos := c_world + side_world * d
 			cell_pos.y = c_world.y
-			var dep := 0.0
+			var dep := 4.0
 			if space != null:
-				var ray := PhysicsRayQueryParameters3D.create(
-					cell_pos + Vector3.UP * 1.5, cell_pos + Vector3.DOWN * 8.0, collision_mask)
-				var hit := space.intersect_ray(ray)
-				if not hit.is_empty():
-					dep = c_world.y - hit["position"].y
-				else:
-					dep = 4.0
+				# The shallowest of five rays over the cell's footprint: a
+				# rock's cap that lies between two cell centres (rows are a
+				# quarter metre apart) must still count, or the flow is solved
+				# straight through a rock that visibly stands in the water.
+				for o: Vector2 in [Vector2.ZERO, Vector2(0.35, 0.0), Vector2(-0.35, 0.0),
+						Vector2(0.0, 0.4), Vector2(0.0, -0.4)]:
+					var at := cell_pos + side_world * (o.x * cw) + dir_world * (o.y * ROW_STEP)
+					var ray := PhysicsRayQueryParameters3D.create(
+						at + Vector3.UP * 1.5, at + Vector3.DOWN * 8.0, collision_mask)
+					var hit := space.intersect_ray(ray)
+					if not hit.is_empty():
+						dep = minf(dep, c_world.y - hit["position"].y)
+			else:
+				dep = 0.0
 			data.depth[j * cells_across + i] = dep
 	return data
 
@@ -995,6 +1106,55 @@ func query_water(world_pos: Vector3) -> Array:
 	if _junction_a != null and _junction_a.has_method("river_head_weight"):
 		weight = minf(weight, _junction_a.river_head_weight(self, s))
 	return [height, flow, depth, weight]
+
+
+## Height of the surface as the vertex shader draws it at time `t`
+## (WaterManager.water_time): the baked level and offset plus the standing
+## waves, term for term as in water_surface_body.gdshaderinc. Player ripples
+## are not included (GPU only). NAN outside the water.
+func drawn_height(world_pos: Vector3, t: float) -> float:
+	if baked_segments.is_empty() or curve == null:
+		return NAN
+	var mgr := _manager()
+	var s := curve.get_closest_offset(to_local(world_pos))
+	var seg := _segment_of(s)
+	var data := baked_segments[seg]
+	if data == null or not data.is_valid():
+		return NAN
+	var rng := _segment_range(seg)
+	var fj := clampf((s - rng.x) / ROW_STEP, 0.0, float(data.rows) - 1.001)
+	var j := int(fj)
+	var c := data.row_center[j]
+	var dir := data.row_dir[j]
+	var side := Vector3(dir.z, 0.0, -dir.x)
+	var across := Vector3(world_pos.x - c.x, 0.0, world_pos.z - c.z).dot(side)
+	var hw := data.row_half_width[j]
+	if absf(across) > hw:
+		return NAN
+	var fi := clampf((across + hw) / (2.0 * hw) * float(data.cells_across) - 0.5,
+		0.0, float(data.cells_across) - 1.001)
+	var base := data.row_height[j]
+	if j + 1 < data.rows:
+		base = lerpf(data.row_height[j], data.row_height[j + 1], fj - float(j))
+	var depth := data.sample_array(data.depth, fi, fj)
+	var foam := data.sample_array(data.foam, fi, fj)
+	var off := data.sample_array(data.surface_offset, fi, fj)
+	var slope_arr := data.cell_slope if data.cell_slope.size() == data.cells_across * data.rows else PackedFloat32Array()
+	var slope := data.sample_array(slope_arr, fi, fj) if not slope_arr.is_empty() \
+		else (data.row_slope[j] if j < data.row_slope.size() else 0.0)
+	var speed := Vector2(data.sample_array(data.vel_across, fi, fj),
+		data.sample_array(data.vel_along, fi, fj)).length()
+	var fall := smoothstep(0.3, 0.7, slope)
+	var shore := smoothstep(0.02, 0.2, depth)
+	var wave_amp := style.standing_wave_height if style != null else 0.08
+	var amp := wave_amp * (0.3 + 1.2 * foam) * clampf(speed / 2.0, 0.0, 1.3) * (1.0 - fall) * shore
+	amp *= 0.85 + 0.15 * sin(t * 1.7 + s * 2.0)
+	# wave_h(v_metric, t), v_metric = (across, s)
+	var h0 := 0.0
+	if mgr != null:
+		h0 = mgr.sample_noise(Vector2(across * 0.22, s * 0.16 - t * 0.02), 2) - 0.5
+	var lift := (off * (1.0 - fall) + h0 * 2.0 * amp + 0.02 * foam) * shore
+	return base + lift
 
 
 ## Surface height of the river beside a position on its bank (within

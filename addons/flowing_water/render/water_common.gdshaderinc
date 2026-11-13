@@ -34,16 +34,22 @@ uniform float style_detail_rest = 0.35;
 uniform float style_detail_speed = 1.0;
 uniform float style_wave_height = 0.08;
 uniform float style_refraction = 1.0;
-uniform vec3 style_foam_color = vec3(0.92, 0.95, 0.96);
+uniform vec3 style_foam_color = vec3(0.93, 0.93, 0.91);
 uniform float style_foam_amount = 1.0;
+uniform float style_foam_water_tint = 0.6;
 uniform float style_foam_softness = 0.12;
 uniform float style_foam_tile = 2.0;
 uniform float style_roughness = 0.08;
-uniform float style_specular = 0.5;
+uniform float style_specular = 0.36;
 uniform float style_color_bands = 0.0;
 uniform float style_shoreline_width = 0.0;
 uniform float style_sharp_highlights = 0.0;
 uniform float style_use_depth_gradient = 0.0;
+// still water (ponds, lakes): wind wavelets, shore lapping, inflow foam
+uniform float style_wind_wave_height = 0.015;
+uniform float style_wind_wave_detail = 1.0;
+uniform float style_shore_foam = 0.5;
+uniform float style_inflow_foam = 0.6;
 uniform sampler2D style_depth_gradient : filter_linear, repeat_disable, hint_default_black;
 
 // Second style + blend, used only in junction blend zones. The blend factor
@@ -64,15 +70,20 @@ uniform float style_b_detail_rest = 0.35;
 uniform float style_b_detail_speed = 1.0;
 uniform float style_b_wave_height = 0.08;
 uniform float style_b_refraction = 1.0;
-uniform vec3 style_b_foam_color = vec3(0.92, 0.95, 0.96);
+uniform vec3 style_b_foam_color = vec3(0.93, 0.93, 0.91);
 uniform float style_b_foam_amount = 1.0;
+uniform float style_b_foam_water_tint = 0.6;
 uniform float style_b_foam_softness = 0.12;
 uniform float style_b_foam_tile = 2.0;
 uniform float style_b_roughness = 0.08;
-uniform float style_b_specular = 0.5;
+uniform float style_b_specular = 0.36;
 uniform float style_b_color_bands = 0.0;
 uniform float style_b_shoreline_width = 0.0;
 uniform float style_b_sharp_highlights = 0.0;
+uniform float style_b_wind_wave_height = 0.015;
+uniform float style_b_wind_wave_detail = 1.0;
+uniform float style_b_shore_foam = 0.5;
+uniform float style_b_inflow_foam = 0.6;
 
 // --- body parameters ----------------------------------------------------------
 // Wind ripples for still water (ponds); strength set by the pond / WindField.
@@ -137,6 +148,39 @@ vec4 flow_phases(vec2 uvm, vec2 flow, float scale, float period, float jit, floa
 		acc += w * texture(noise_tex, (uvm - off) * scale + vec2(0.37, 0.11) * fk);
 	}
 	return acc / 1.5;
+}
+
+// Wind-driven wavelets on still water. Returns vec3(height, d/dx, d/dz) in
+// world metres for a world (x, z) position. Short gravity waves travel at
+// their own speed (deep-water dispersion), spread around the wind direction,
+// with a warped phase so no wave train reads as a regular sine. `count`
+// picks how many trains are summed (the swell first, then shorter ones):
+// vertices take only the swell, which the pond mesh can resolve.
+// Unscaled the trains have a wind-sea steepness (~0.1, swell about 0.1 m
+// high); callers scale height and slope separately (WIND_WAVE_REF_H).
+const float WIND_WAVE_REF_H = 0.096;
+vec3 wind_waves(vec2 p, float t, vec2 wdir, int count) {
+	vec2 d0 = normalize(wdir + vec2(1e-4, 0.0));
+	// phase warp: slow, large-scale, so trains bend and break up
+	vec2 warp = textureLod(noise_tex, p * 0.045 + t * d0 * 0.004, 0.0).rg - 0.5;
+	vec3 acc = vec3(0.0);
+	for (int i = 0; i < 4; i++) {
+		if (i >= count) {
+			break;
+		}
+		float fi = float(i);
+		// wavelength (m), angle off the wind, steepness (amplitude * k)
+		float lambda = 5.5 * pow(0.47, fi);
+		float ang = (fi - 1.4) * 0.42;
+		float steep = 0.11 - fi * 0.012;
+		vec2 dir = vec2(d0.x * cos(ang) - d0.y * sin(ang), d0.x * sin(ang) + d0.y * cos(ang));
+		float k = 2.0 * WPI / lambda;
+		float omega = sqrt(9.81 * k);
+		float a = steep / k;
+		float ph = dot(dir, p) * k - omega * t + warp.x * (6.0 + fi * 3.0) + warp.y * 4.0 * fi;
+		acc += vec3(a * sin(ph), a * k * cos(ph) * dir);
+	}
+	return acc;
 }
 
 vec3 speed_ramp(float t) {

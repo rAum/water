@@ -287,7 +287,8 @@ clamped per step; sleeps out of water; falls freely over waterfalls.
 **Queries** (`WaterManager` autoload — baked CPU arrays, no GPU readback):
 
 ```gdscript
-WaterManager.get_height(pos)   # NAN if no water here
+WaterManager.get_height(pos)   # NAN if no water here (baked mean level)
+WaterManager.drawn_height(pos) # the surface as drawn this frame, waves included
 WaterManager.get_flow(pos)     # Vector3, m/s
 WaterManager.get_depth(pos)
 WaterManager.get_body(pos)
@@ -353,8 +354,16 @@ Settings:
 | WaterManager | `underwater_vignette` | Corner darkening, 0 = off |
 | WaterManager | `sun_light` | The DirectionalLight3D for caustics and shafts (default: the first visible one) |
 
-`WaterManager.is_camera_underwater()` tells gameplay code when the view
-is active. `storm_turbidity` muddies the underwater view together with
+`WaterManager.is_camera_underwater()` tells gameplay code when the eye is
+under the surface **as drawn**: the CPU reproduces the vertex shader's
+standing waves and wind swell exactly (`drawn_height()`), because every
+water surface animates on the manager's clock (`WaterManager.water_time`,
+the `flowing_water_time` shader global) instead of the engine's `TIME`.
+The pass itself switches on within 0.3 m above the surface and finds the
+waterline pixel by pixel (player ripples included). A third-person camera
+must not sink into the terrain: buried in the ground it sees the water from
+beneath with no water around the lens (the demo's player sweeps its camera
+boom against the world for this). `storm_turbidity` muddies the underwater view together with
 the surface.
 
 Cost of the pass at 1280x800 on the development machine (Apple M4 Pro,
@@ -406,7 +415,7 @@ active near the player; 3 fewer when not):
 
 | Variant | Reads/px (fragment) |
 |---|---|
-| `water_full` (High/Medium) | 19 base (2 baked + 1 jitter + 6 detail + 3 ripple + 2 screen + 2 depth + 2 caustics, +1 mip-blurred), +3 for the fine foam layer within 14 m of the camera where there is foam, plus screen-space reflections on smooth water: up to 18 depth taps + 1 colour, early-out on first hit and skipped under foam/falls |
+| `water_full` (High/Medium) | 19 base (2 baked + 1 jitter + 6 detail + 3 ripple + 2 screen + 2 depth + 2 caustics, +1 mip-blurred), +3 for the fine foam layer within 14 m of the camera where there is foam, plus screen-space reflections on smooth water: up to 23 depth taps (18 steps, 5 shortened at the screen edge) plus up to 3 six-tap refinements + 1 colour, early-out on first real hit and skipped under foam/falls |
 | `water_deck` | 13 (2 + 1 + 3 detail + 3 ripple + 2 screen + 1 depth + 1 caustics), no SSR, no fine foam |
 | `water_low` | 9 (no screen/depth textures at all) |
 | `water_far` (distance LOD) | 6 |
@@ -448,6 +457,25 @@ run `benchmark.tscn` on yours (Vulkan reports real GPU timings) and send
 the log; if the Deck preset misses 2.5 ms, the next things to cut are the
 ripple grid (128² → 96²), the spray amount, and the detail tile count
 (raise `foam_tile_size`).
+
+## The world water map (wet banks, caustics, ripples)
+
+Terrain, rock and your own materials that include
+`render/water_receiver.gdshaderinc` read a map of the water (level, depth,
+flow) to darken and gloss wet banks, tint and light the bed under water,
+and the player ripples read it for flow. `WaterManager.map_mode`:
+
+| Mode | What it covers | Cost |
+|---|---|---|
+| `WHOLE_SCENE` (default) | every water body at once, built from the bakes at load and again only after a re-bake | about 2.6 MB and 80 ms once for the demo (573² texels at `map_texel` 0.2 m) |
+| `FOLLOW_CAMERA` | a `map_follow_extent` (64 m) square around the camera, rebuilt in the background every 6 m | constant memory; the effect fades out between `map_follow_fade` 14 and 20 m |
+
+`WHOLE_SCENE` has no edge, so nothing pops or fades as you move. A scene
+larger than `map_max_size` × 4 texels (8 km at 0.2 m) falls back to
+following the camera; above `map_max_size` (2048) the texel grows.
+Earlier versions only had a 32 m camera-following map with a hard edge:
+beyond 16 m the bed rendered dry and bright, and a square of it turned
+dark at once whenever the map caught up.
 
 ## Connecting to wind, fog and the larger water system
 

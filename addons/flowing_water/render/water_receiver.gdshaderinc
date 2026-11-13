@@ -23,6 +23,7 @@
 global uniform sampler2D flowing_water_map;
 global uniform vec4 flowing_water_map_rect;   // xy origin, z size, w active
 global uniform float flowing_water_map_base;
+global uniform vec4 flowing_water_map_focus;  // xy camera xz, z fade start, w fade end (m)
 global uniform sampler2D flowing_water_noise : filter_linear_mipmap_anisotropic, repeat_enable;
 global uniform float flowing_water_caustics;
 
@@ -44,8 +45,17 @@ float water_surface_height_depth(vec3 world_pos, out float depth) {
 	if (m.b <= 0.01) {
 		return -1e6;
 	}
-	depth = m.a * 8.0;
-	return (m.b - 2.0) * 2.0 + flowing_water_map_base;
+	// Fade out with distance from the camera, never at the map's edge: the
+	// surface sinks and the depth thins, so wet bands, algae tint and
+	// caustics withdraw smoothly instead of a square of bed switching from
+	// dry to wet when the map re-centres.
+	float reach = 1.0 - smoothstep(flowing_water_map_focus.z, flowing_water_map_focus.w,
+		length(world_pos.xz - flowing_water_map_focus.xy));
+	if (reach <= 0.0) {
+		return -1e6;
+	}
+	depth = m.a * 8.0 * reach;
+	return (m.b - 2.0) * 2.0 + flowing_water_map_base - (1.0 - reach) * 1.5;
 }
 
 float water_surface_height(vec3 world_pos) {

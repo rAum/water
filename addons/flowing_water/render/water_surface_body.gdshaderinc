@@ -24,6 +24,13 @@
 
 #include "water_common.gdshaderinc"
 
+// Every animation of the surface runs on the manager's clock, not on the
+// engine's TIME: the CPU then knows exactly which wave is under the camera
+// (WaterRiver/WaterPond.drawn_height), and the underwater view switches on
+// at the surface as drawn, waves and all, not at the baked mean level.
+global uniform float flowing_water_time;
+#define TIME flowing_water_time
+
 #ifdef USE_SCREEN_TEXTURE
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap, repeat_disable;
 #endif
@@ -49,23 +56,34 @@ vec4 water_ssr(vec3 view_pos, vec3 view_normal, vec3 geo_normal, mat4 proj, mat4
 	}
 	float step_len = 0.35;
 	vec3 p = view_pos + dir * 0.15;
-	for (int i = 0; i < 18; i++) {
+	int shortened = 0;
+	int refines = 0;
+	for (int i = 0; i < 23; i++) {
 		vec3 prev = p;
-		p += dir * step_len;
+		vec3 q = p + dir * step_len;
+		vec4 clip = proj * vec4(q, 1.0);
+		vec2 uv = clip.xy / max(clip.w, 1e-5) * 0.5 + 0.5;
+		if (clip.w <= 0.0 || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+			// The steps grow fast: one can leap from below a far bank or
+			// rock straight off the screen and skip it. Then the pixel next
+			// to one that hit the bank showed the sky, and the mirror image
+			// ended in a hard edge that slid across the water as the camera
+			// moved. Shorten the step and follow the ray up to the edge.
+			if (shortened < 5) {
+				shortened++;
+				step_len *= 0.5;
+				continue;
+			}
+			break;
+		}
+		p = q;
 		step_len *= 1.32;
-		vec4 clip = proj * vec4(p, 1.0);
-		if (clip.w <= 0.0) {
-			break;
-		}
-		vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
-		if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-			break;
-		}
 		float raw = texture(depth_tex, uv).x;
 		vec4 sp = inv_proj * vec4(uv * 2.0 - 1.0, raw, 1.0);
 		float scene_z = -sp.z / sp.w;
 		float ray_z = -p.z;
-		if (ray_z > scene_z && ray_z < scene_z + step_len * 1.6 + 0.5) {
+		if (ray_z > scene_z && refines < 3) {
+			refines++;
 			// the steps are long: close in on the crossing, or a ray that
 			// skims the surface lands a step late and smears its image
 			// into streaks
@@ -84,8 +102,19 @@ vec4 water_ssr(vec3 view_pos, vec3 view_normal, vec3 geo_normal, mat4 proj, mat4
 			}
 			vec4 hc = proj * vec4(hi, 1.0);
 			uv = hc.xy / hc.w * 0.5 + 0.5;
-			vec2 e = smoothstep(vec2(0.0), vec2(0.08), uv) * (1.0 - smoothstep(vec2(0.92), vec2(1.0), uv));
-			return vec4(textureLod(screen_tex, uv, 0.0).rgb, e.x * e.y);
+			// A ray that really meets a surface ends just behind it once
+			// refined; one that passes behind a rock or bank stays far
+			// behind it (the depth jumps at the silhouette). Those used to
+			// count as hits (the tolerance grew with the step, to metres)
+			// and painted grey blobs of the rock where the sky belongs.
+			vec4 hs = inv_proj * vec4(uv * 2.0 - 1.0, texture(depth_tex, uv).x, 1.0);
+			float behind = -hi.z - (-hs.z / hs.w);
+			float tol = length(hi - lo) * 2.0 + 0.15 + 0.01 * -hi.z;
+			float solid = 1.0 - smoothstep(tol, tol * 2.0, behind);
+			if (solid > 0.0) {
+				vec2 e = smoothstep(vec2(0.0), vec2(0.08), uv) * (1.0 - smoothstep(vec2(0.92), vec2(1.0), uv));
+				return vec4(textureLod(screen_tex, uv, 0.0).rgb, e.x * e.y * solid);
+			}
 		}
 	}
 	return vec4(0.0);
@@ -171,12 +200,24 @@ void vertex() {
 	v_wave_slope = vec2(
 		wave_h(v_metric + vec2(e, 0.0), TIME) - h0,
 		wave_h(v_metric + vec2(0.0, e), TIME) - h0) / e * 2.0 * amp;
-	float lift = (ax.r * (1.0 - fall) + h0 * 2.0 * amp + 0.02 * fl.b) * shore;
-	// player ripples displace vertices near the camera
+	// (COLOR.g: a river over a pond junction rides at the pond's level, so
+	// its own offset and waves give way there - see water_junction.gd)
+	float lift = (ax.r * (1.0 - fall) + h0 * 2.0 * amp + 0.02 * fl.b) * shore * (1.0 - COLOR.g);
+	// player ripples displace vertices near the camera (a ripple never
+	// opens the water down to the bed: at most a third of the depth)
 	vec3 rip = ripple_sample(wp.xz);
-	lift += rip.x * shore * dist_fade;
+	lift += clamp(rip.x, -depth * 0.33, depth * 0.33) * shore * dist_fade;
+	// still water: the wind's swell rocks the surface (only the longest
+	// train - the pond mesh is about a metre between vertices)
+	if (wind_ripple_strength > 0.001) {
+		float ww_h = mix(style_wind_wave_height, style_b_wind_wave_height, blend_w);
+		float calm = 1.0 - clamp(speed / 0.6, 0.0, 1.0);
+		float wh = wind_waves(wp.xz, TIME, wind_dir, 1).x / WIND_WAVE_REF_H;
+		lift += wh * ww_h * (wind_ripple_strength / 0.4) * calm * shore * dist_fade
+			* smoothstep(0.1, 0.5, depth);
+	}
 #else
-	float lift = ax.r * (1.0 - fall) * shore;
+	float lift = ax.r * (1.0 - fall) * shore * (1.0 - COLOR.g);
 #endif
 	// a falling sheet is never still: it billows, more the further it has
 	// fallen, and its two surfaces move independently so its thickness varies
@@ -227,6 +268,13 @@ void fragment() {
 	float s_bands = mix(style_color_bands, style_b_color_bands, blend_w);
 	float s_shoreline = mix(style_shoreline_width, style_b_shoreline_width, blend_w);
 	float s_sharp = mix(style_sharp_highlights, style_b_sharp_highlights, blend_w);
+	float s_foam_tint = mix(style_foam_water_tint, style_b_foam_water_tint, blend_w);
+	float s_ww_detail = mix(style_wind_wave_detail, style_b_wind_wave_detail, blend_w);
+	float s_shore_foam = mix(style_shore_foam, style_b_shore_foam, blend_w);
+	float s_inflow_foam = mix(style_inflow_foam, style_b_inflow_foam, blend_w);
+	// still water (a pond or lake: a body with wind ripples), and how calm it is here
+	bool lake = wind_ripple_strength > 0.001;
+	float still = 1.0 - clamp(speed / 0.5, 0.0, 1.0);
 
 	// --- detail noise: three-phase flow sampling, per-pixel phase jitter ------
 	float tile = 2.0 / max(s_foam_tile, 0.25);
@@ -237,6 +285,11 @@ void fragment() {
 	vec2 st = vec2(1.0, mix(1.0, 0.6, clamp(abs(flow.y) / 4.0, 0.0, 1.0)) * mix(1.0, 0.6, clamp((abs(flow.y) - 4.0) / 3.0, 0.0, 1.0)));
 	vec2 uvm = v_metric * st;
 	vec2 flow_m = flow * st;
+	// on still water the wind drives a slow surface drift (a few percent of
+	// the wind speed): the lace and the ripples are never frozen in place
+	if (lake) {
+		flow_m += wind_dir * 0.06 * still;
+	}
 #if DETAIL_LAYERS >= 2
 	vec4 d1 = flow_phases(uvm, flow_m, 0.5 * tile, 1.2, jit, TIME);
 	vec4 d2 = flow_phases(uvm, flow_m, 2.3 * tile, 0.45, jit + 0.5, TIME);
@@ -269,10 +322,60 @@ void fragment() {
 	// only the very whitest water (falls, plunge pools) closes completely;
 	// streaks and wakes always keep gaps where the water shows through
 	cover *= mix(0.74, 1.0, smoothstep(0.9, 1.0, mask));
+	// The tongue: where the bed steepens toward a lip the water accelerates
+	// and smooths out into a clear, glassy sheet - it does not break into
+	// white until it is in the air (the fall itself whitens it below). The
+	// bake marks the approach as white water; only a few torn streaks of
+	// that survive on the tongue.
+	// (it carries on over the brink: the first stretch of the drop is still
+	// the clear tongue, the sheet whitens as it takes in air further down)
+	float tongue = v_fall_t > 0.001
+		? 1.0 - smoothstep(0.04, 0.5, v_fall_t)
+		: smoothstep(0.07, 0.22, ax.a) * (1.0 - smoothstep(0.3, 0.6, ax.a));
+	cover *= mix(1.0, 0.12, tongue);
+	// and no bubbles in it yet: the glassy tongue is see-through
+	aer *= 1.0 - 0.85 * tongue;
 	float foam = smoothstep(1.0 - cover - s_foam_soft, 1.0 - cover + s_foam_soft, pattern)
 		* step(0.001, cover);
 	// no painted line along the banks: foam needs a little water under it
 	foam *= smoothstep(0.03, 0.14, baked_depth);
+	// --- still water: foam lapping at the shore, foam carried in by a river ---
+	if (lake) {
+		// small waves run up the shore and leave a fringe of lace at the
+		// waterline that swells and recedes as each one arrives; the phase
+		// wanders along the shore so the whole edge never pulses together
+		float lap_ph = textureLod(noise_tex, v_world.xz * 0.09 + TIME * wind_dir * 0.01, 0.0).b;
+		float lap = 0.5 + 0.5 * sin(TIME * 1.1 + lap_ph * 14.0);
+		float reach = mix(0.07, 0.2, lap * lap);
+		float fringe = (1.0 - smoothstep(reach * 0.3, reach, baked_depth)) * mix(0.6, 1.0, lap);
+		// a second, older line left further out by the wave before, breaking up
+		float trail = (1.0 - smoothstep(0.03, 0.06, abs(baked_depth - reach * 1.6))) * 0.55 * (1.0 - lap);
+		float lake_cover = max(fringe, trail) * s_shore_foam * 1.25 * mix(0.4, 1.0, still);
+		// foam a river brings in drifts out with its current in loose rafts
+		// and streaks, thinning as the water slows
+		float drift = smoothstep(0.01, 0.2, speed + ax.g * 0.3) * smoothstep(0.3, 0.7, d1.b + 0.12);
+		lake_cover = max(lake_cover, (drift * 0.7 + mask * 0.5) * s_inflow_foam);
+		// still water does not stretch the lace: the blended phases are flat,
+		// so restore contrast (and the fine bubble grain where there is one)
+		float lace = clamp((pattern - 0.5) * 2.4 + 0.5, 0.0, 1.0);
+		lace = mix(lace, fine, 0.3);
+		float lake_foam = smoothstep(1.0 - lake_cover - s_foam_soft, 1.0 - lake_cover + s_foam_soft, lace)
+			* step(0.001, lake_cover) * smoothstep(0.004, 0.03, baked_depth);
+		foam = max(foam, lake_foam);
+		cover = max(cover, lake_cover * 0.8);
+	} else if (fade_out_len_m > 0.001 && s_inflow_foam > 0.001) {
+		// a river running out into still water (its junction ribbon over a
+		// pond): the current slackens and the foam it carries bunches up into
+		// loose rafts and lines that drift out with it
+		float into = smoothstep(fade_out_start_m - 7.0, fade_out_start_m + fade_out_len_m * 0.6, v_metric.y);
+		float rafts = smoothstep(0.35, 0.72, d1.b);
+		float in_cover = into * rafts * s_inflow_foam * 0.75;
+		float lace = clamp((pattern - 0.5) * 2.0 + 0.5, 0.0, 1.0);
+		float in_foam = smoothstep(1.0 - in_cover - s_foam_soft, 1.0 - in_cover + s_foam_soft, lace)
+			* step(0.001, in_cover) * smoothstep(0.03, 0.14, baked_depth);
+		foam = max(foam, in_foam);
+		cover = max(cover, in_cover * 0.8);
+	}
 #ifdef STYLIZED
 	// foam line along shores and around rocks
 	if (s_shoreline > 0.001) {
@@ -284,16 +387,32 @@ void fragment() {
 
 	// --- surface normal: add slopes, then build the normal in the river frame -
 	float rough_amp = clamp(mix(s_detail_rest, s_detail_speed, clamp(speed / 3.0, 0.0, 1.0))
-		+ mask * 0.5, 0.0, 1.6) * (1.0 - fall * 0.6);
+		+ mask * 0.5, 0.0, 1.6) * (1.0 - fall * 0.6) * mix(1.0, 0.35, tongue);
 	// slicks: glassy patches drifting with the current (boils of a slow river)
 	rough_amp *= mix(1.0, mix(0.12, 1.0, smoothstep(0.38, 0.62, d1.b)), s_slicks);
 	vec2 sl = v_wave_slope + detail_slope * rough_amp;
-	// wind ripples on still water
-	float still = 1.0 - clamp(speed / 0.5, 0.0, 1.0);
-	if (wind_ripple_strength > 0.001 && still > 0.01) {
-		vec2 w1 = texture(noise_tex, (v_metric + TIME * wind_dir * 0.35) * 0.45).rg - 0.5;
-		vec2 w2 = texture(noise_tex, (v_metric - TIME * wind_dir * 0.22) * 1.3 + 0.31).rg - 0.5;
-		sl += (w1 * 0.45 + w2 * 0.3) * wind_ripple_strength * still;
+	// --- wind on still water: wave trains plus short ripples riding on them
+	if (lake && still > 0.01) {
+		float wind = min(wind_ripple_strength / 0.4, 2.5);
+		// gusts: cat's-paws of rougher water sweeping across with the wind
+		float gust = textureLod(noise_tex, v_world.xz * 0.022 - TIME * wind_dir * 0.035, 0.0).b;
+		gust = mix(0.4, 1.4, smoothstep(0.32, 0.68, gust));
+#if DETAIL_LAYERS >= 2
+		vec3 ww = wind_waves(v_world.xz, TIME, wind_dir, 4);
+#else
+		vec3 ww = wind_waves(v_world.xz, TIME, wind_dir, 3);
+#endif
+		vec2 g = ww.yz * 0.6 * mix(0.8, 1.15, gust);
+		vec2 w1 = texture(noise_tex, v_world.xz * 0.85 - TIME * wind_dir * 0.3).rg - 0.5;
+		g += w1 * 0.36 * gust;
+#if DETAIL_LAYERS >= 2
+		vec2 w2 = texture(noise_tex, v_world.xz * 2.1 + vec2(0.31, 0.17) - TIME * wind_dir * 0.5).rg - 0.5;
+		g += w2 * 0.24 * gust;
+#endif
+		g *= s_ww_detail * wind * still;
+		// world-axis slopes, handed over in the surface frame
+		vec3 gw = vec3(g.x, 0.0, g.y);
+		sl += vec2(dot(gw, v_side), dot(gw, v_tan));
 	}
 	// player ripples bend the normal everywhere inside the ripple grid
 	vec3 rip = ripple_sample(v_world.xz);
@@ -343,20 +462,30 @@ void fragment() {
 	float thickness = baked_depth / max(ndv, 0.35);
 #endif
 #ifdef USE_DEPTH_BUFFER
-	float edge = smoothstep(0.0, 0.04, min(thickness, baked_depth + 0.5)) * v_fade;
-	// Seen at a low angle the view ray runs a long way before it meets the
-	// ground, so a ribbon lying a finger above a low bank would pass for
-	// deep water and show as a flat slab. There the bake decides: where it
-	// found no water, there is none. (Looking down, the depth buffer gives
-	// the finer shoreline.)
-	float grazing = 1.0 - smoothstep(0.12, 0.4, abs(dot(view_dir, v_norm0)));
-	if (v_fall_t < 0.001) {
-		edge *= mix(1.0, smoothstep(0.0, 0.045, baked_depth), grazing);
+	// The shoreline is where the surface meets the ground, and the depth
+	// buffer knows exactly where that is. The view ray's run through the
+	// water times the sine of its angle to the surface is the height of
+	// water over the point where it lands: zero right at the waterline,
+	// whatever the angle, so the water reaches the bank at eye level too
+	// (a shoreline taken from the baked grid stops a cell short of it and
+	// leaves a dry strip). Only a few centimetres of fade: soft, no gap.
+	float ray_len = max(thick_view, 0.0) * dist / max(frag_depth_lin, 1e-3);
+	float column = ray_len * abs(dot(view_dir, v_norm0));
+	column = mix(column, baked_depth, far_w);
+	// where the bake found the ground well above the water there is none,
+	// whatever lies behind (the side of a ribbon over a low bank)
+	column = min(column, baked_depth + 0.12);
+	float edge = smoothstep(0.0, 0.03, column);
+	if (v_fall_t > 0.001) {
+		// a falling sheet has no bed under it: only its own thickness
+		edge = smoothstep(0.0, 0.04, min(thickness, baked_depth + 0.5));
 	}
+	edge *= v_fade;
 #else
-	// without the depth buffer the shoreline comes from the baked grid:
-	// fade wider so its cells do not show as steps
-	float edge = smoothstep(0.02, 0.2, baked_depth) * v_fade;
+	// without the depth buffer the shoreline comes from the baked grid; it
+	// interpolates to zero at the waterline, so fade over the last few
+	// centimetres of depth only
+	float edge = smoothstep(0.0, 0.05, baked_depth) * v_fade;
 #endif
 	// Seen from below by a camera that is not in this water (standing under
 	// a ledge the river runs along, looking up at its brink): no deeper water
@@ -393,7 +522,13 @@ void fragment() {
 #ifdef USE_SCREEN_TEXTURE
 	vec2 ruv = SCREEN_UV;
 #if defined(REFRACTION_FULL) || defined(REFRACTION_SIMPLE)
-	vec2 roff = sl * 0.035 * s_refraction * clamp(thickness * 3.0, 0.0, 1.0) * (8.0 / max(dist, 4.0));
+	// The bed seen through a tilted surface shifts by about the water
+	// thickness times the slope (times 1 - 1/n); on screen that is metres
+	// over the width the view covers at this distance. (A fixed screen
+	// offset smeared objects standing in the water into jagged streaks.)
+	float view_m = 2.0 * dist / max(PROJECTION_MATRIX[1][1], 0.1);
+	vec2 roff = clamp(sl, vec2(-1.0), vec2(1.0)) * 0.25 * s_refraction * min(thickness, 1.2) / max(view_m, 0.5);
+	roff = clamp(roff, vec2(-0.03), vec2(0.03));
 	ruv = SCREEN_UV + roff;
 #ifdef REFRACTION_FULL
 	// if the refracted sample is in front of the water, an object above the
@@ -432,6 +567,28 @@ void fragment() {
 	} else {
 		// --- water colour ----------------------------------------------------------
 		float absorb_scale = mix(4.0, 1.0, s_clarity);
+		// the colour daylight takes on a short way through this water (and
+		// its silt): what bubbles under and between the foam are lit with.
+		// Foam and aerated water take their tint from here, never from a
+		// fixed blue, so they sit in every water from peat to glacier milk.
+		vec3 path_col = exp(-s_absorption * absorb_scale * 0.4);
+		vec3 sed_hue = s_sediment / max(max(s_sediment.r, max(s_sediment.g, s_sediment.b)), 1e-3);
+		path_col *= mix(vec3(1.0), sed_hue, (1.0 - t_sed) * 0.7);
+		vec3 water_hue = path_col / max(max(path_col.r, max(path_col.g, path_col.b)), 1e-3);
+#ifdef USE_SCREEN_TEXTURE
+		// Shade under water. Whatever lies in shadow under the surface (a
+		// rock's underside, the shadow it casts on the bed) was lit by the
+		// renderer with sky ambient only, so it comes through navy blue. Under
+		// real water that shade is filled by light the water scatters: it has
+		// the water's colour, like the lit bed beside it. Re-tint the dark
+		// part of the transmitted scene, keeping its brightness.
+		if (!from_below && v_fall_t < 0.001) {
+			float r_lum = dot(scene_refr, vec3(0.3, 0.59, 0.11));
+			float shade_w = (1.0 - smoothstep(0.06, 0.25, r_lum)) * smoothstep(0.0, 0.05, thickness);
+			vec3 hue_l = water_hue / max(dot(water_hue, vec3(0.3, 0.59, 0.11)), 1e-3);
+			scene_refr = mix(scene_refr, hue_l * r_lum, shade_w * 0.95);
+		}
+#endif
 		// bubbles carried under the surface below rapids and falls
 		float bubbles = clamp(aer * 0.9, 0.0, 1.0);
 		vec3 transmit = exp(-s_absorption * thickness * absorb_scale) * t_sed
@@ -455,7 +612,7 @@ void fragment() {
 		// what comes back out of the water: its own colour, the sediment
 		// where the path is long enough to hit it, pale where it is aerated
 		vec3 scatter = mix(s_scatter, s_sediment, 1.0 - t_sed);
-		scatter = mix(scatter, vec3(0.42, 0.62, 0.62), bubbles * 0.7);
+		scatter = mix(scatter, path_col * 0.62, bubbles * 0.7);
 
 #if defined(USE_DEPTH_BUFFER) && defined(USE_SCREEN_TEXTURE)
 		// --- caustics: light focused onto whatever lies under the water --------
@@ -464,6 +621,16 @@ void fragment() {
 			vec3 bed = (INV_VIEW_MATRIX * vec4(vpos.xyz / vpos.w, 1.0)).xyz;
 			float column = v_world.y - bed.y;
 			if (column > 0.02) {
+				// The light network is cast by the surface onto what lies
+				// below: it lands on ground facing up, not on the side of a
+				// leg, a log or a rock face, where a straight-down projection
+				// draws it as vertical streaks. The receiver's slope comes
+				// from the depth buffer.
+				vec3 bed_n = normalize(cross(dFdx(bed), dFdy(bed)));
+				bed_n *= sign(bed_n.y + 1e-4);
+				// a depth step (an object's silhouette) has no surface of its own
+				float step_px = max(length(dFdx(bed)), length(dFdy(bed))) / max(dist * 0.002, 1e-4);
+				float flat_w = smoothstep(0.45, 0.85, bed_n.y) * (1.0 - smoothstep(4.0, 12.0, step_px));
 				vec2 cuv = bed.xz * (1.0 / max(s_caustics_size, 0.1));
 				float c1 = texture(noise_tex, cuv + TIME * vec2(0.021, 0.14)).a;
 #ifdef CAUSTICS_FULL
@@ -473,8 +640,10 @@ void fragment() {
 				float caus = pow(clamp(c1 * 1.2, 0.0, 1.0), 5.0) * 1.2;
 #endif
 				// sharpest a hand's depth down, fading in the deep and in silt
-				float focus = smoothstep(0.02, 0.22, column) * exp(-column * 0.5) * t_sed * t_sed;
-				scene_refr *= 1.0 + caus * s_caustics * focus * 0.8;
+				float focus = smoothstep(0.02, 0.22, column) * exp(-column * 0.5) * t_sed * t_sed * flat_w;
+				// focused light is taken from the gaps between the lines: the
+				// bed gets a pattern, not a uniform brightening that burns out
+				scene_refr *= 1.0 + (caus - 0.18) * s_caustics * focus * 0.8;
 			}
 		}
 #endif
@@ -550,13 +719,23 @@ void fragment() {
 		// foam is opaque. The fine layer gives it grain up close.
 		float grain = smoothstep(0.15, 0.85, clamp((pattern - 0.4) * 1.8 + 0.5, 0.0, 1.0) * 0.45 + fine * 0.55);
 		float foam_a = foam * mix(0.55, 0.96, smoothstep(0.15, 0.7, cover)) * mix(0.72, 1.0, grain) * v_fade;
-		// white water is not paint: bubbles shade each other, so even solid
-		// foam carries grey-blue streaks and grain
-		vec3 foam_col = s_foam_color * mix(vec3(0.50, 0.57, 0.62), vec3(0.86), grain);
+		// white water is not paint: bubbles shade each other (neutral grey
+		// grain), and thin lace is coloured by the water seen through it
+		// while a dense mat is nearly the white of the bubbles
+#ifdef STYLIZED
+		float tint_k = s_foam_tint * 0.3;
+#else
+		float tint_k = s_foam_tint;
+#endif
+		float thin_foam = 1.0 - smoothstep(0.15, 0.8, cover);
+		vec3 foam_body = mix(vec3(1.0), water_hue, tint_k * mix(0.3, 0.85, thin_foam) * mix(1.0, 0.6, grain));
+		vec3 foam_col = s_foam_color * foam_body * mix(0.6, 0.88, grain);
 		// on a fall the white water is the aerated sheet, not surface foam:
-		// dense curtains are bright, thin water between them greyer, and the
-		// lower surface sits in the shade of the upper one
-		vec3 sheet_col = s_foam_color * mix(vec3(0.42, 0.5, 0.56), vec3(0.86), smoothstep(0.3, 0.92, fall_dens));
+		// dense curtains are bright, thin water between them greyer and more
+		// the colour of the water, and the lower surface sits in the shade
+		// of the upper one
+		float sheet_d = smoothstep(0.3, 0.92, fall_dens);
+		vec3 sheet_col = s_foam_color * mix(vec3(1.0), water_hue, tint_k * mix(0.75, 0.25, sheet_d)) * mix(0.52, 0.88, sheet_d);
 		sheet_col *= mix(1.0, 0.8, lower);
 		foam_col = mix(foam_col, sheet_col, fall_amt);
 		foam_a = mix(foam_a, fall_white * 0.97, fall_amt);
@@ -567,8 +746,10 @@ void fragment() {
 		if (s_sharp > 0.5) {
 			rough = 0.03;
 		}
-		rough = mix(rough, 0.9, foam_a);
-		spec = mix(spec, 0.15, foam_a);
+		// a bubble mat scatters, it does not mirror: little sky in it (a
+		// glossy foam picks up the blue of the sky and reads as a cold film)
+		rough = mix(rough, 0.95, foam_a);
+		spec = mix(spec, 0.06, foam_a);
 		// aerated water scatters light through itself: matte, lit softly from
 		// both sides, no mirror in it
 		float fall_a = fall_amt * foam_a;
@@ -610,7 +791,9 @@ void fragment() {
 		float in_air = smoothstep(0.0, 0.06, v_fall_t);
 		// water that reaches the side of the ribbon has no bank to end at:
 		// it thins out over the last hand's width instead of ending in a cut
-		float rim = smoothstep(0.0, 0.06, min(UV.x, 1.0 - UV.x));
+		// (one cell's width at most: a wider fade would itself leave a
+		// strip of missing water along a bank at the ribbon's side)
+		float rim = smoothstep(0.0, 0.5 / 48.0, min(UV.x, 1.0 - UV.x));
 		ALPHA = clamp(edge, 0.0, 1.0) * rim * mix(1.0, fall_cover, max(fall_amt, in_air))
 			* mix(1.0, in_air, lower) * (outside_below ? 0.4 : 1.0);
 		NORMAL = normalize((VIEW_MATRIX * vec4(n_world, 0.0)).xyz);

@@ -24,29 +24,65 @@ const FALL_PATH := ADDON + "render/water_fall.res"
 const PRESETS := {
 	Quality.DECK: {
 		"shader_suffix": "deck", "vertex_wave_dist": 25.0, "ripple_grid": 128,
-		"ripple_steps": 1, "map_size": 128, "caustics": 1.0, "spray": 0.35,
+		"ripple_steps": 1, "map_size": 192, "caustics": 1.0, "spray": 0.35,
 		"underwater_full": false, "underwater_shafts": 0, "underwater_motes": 0,
 	},
 	Quality.LOW: {
 		"shader_suffix": "low", "vertex_wave_dist": 20.0, "ripple_grid": 0,
-		"ripple_steps": 0, "map_size": 128, "caustics": 0.0, "spray": 0.2,
+		"ripple_steps": 0, "map_size": 192, "caustics": 0.0, "spray": 0.2,
 		"underwater_full": false, "underwater_shafts": 0, "underwater_motes": 0,
 	},
 	Quality.MEDIUM: {
 		"shader_suffix": "full", "vertex_wave_dist": 40.0, "ripple_grid": 192,
-		"ripple_steps": 2, "map_size": 256, "caustics": 1.0, "spray": 0.7,
+		"ripple_steps": 2, "map_size": 320, "caustics": 1.0, "spray": 0.7,
 		"underwater_full": true, "underwater_shafts": 6, "underwater_motes": 2,
 	},
 	Quality.HIGH: {
 		"shader_suffix": "full", "vertex_wave_dist": 60.0, "ripple_grid": 256,
-		"ripple_steps": 2, "map_size": 256, "caustics": 1.0, "spray": 1.0,
+		"ripple_steps": 2, "map_size": 320, "caustics": 1.0, "spray": 1.0,
 		"underwater_full": true, "underwater_shafts": 12, "underwater_motes": 4,
 	},
 }
 
-## World map coverage: a square this many metres wide around the player,
-## snapped to texel size, rebuilt in the background as the player moves.
-const MAP_EXTENT := 32.0
+## How the world water map (what banks, bed and rocks read to look wet, show
+## caustics and tint under water; also the ripple simulation's flow) covers
+## the scene.
+enum MapMode {
+	## One map over every water body in the scene, built once from the
+	## bakes (again only when a body is re-baked). No edges, nothing to
+	## fade, no work while playing. The default.
+	WHOLE_SCENE,
+	## A square of `map_follow_extent` metres around the camera, rebuilt in
+	## the background as it moves; the water's effect on its surroundings
+	## fades out before the square's edge. For worlds too large for one map
+	## (more than `map_max_size` texels at `map_texel`).
+	FOLLOW_CAMERA,
+}
+
+var map_mode: MapMode = MapMode.WHOLE_SCENE:
+	set(v):
+		map_mode = v
+		invalidate_map()
+## Metres per texel of the whole-scene map (finer = sharper wet bands at
+## the waterline, more memory: 8 bytes per texel).
+var map_texel := 0.2:
+	set(v):
+		map_texel = maxf(v, 0.05)
+		invalidate_map()
+## Largest whole-scene map, texels per side; a scene that needs more uses a
+## coarser texel (and above 4x this, the follow-camera map).
+var map_max_size := 2048
+## Width of the follow-camera map (m).
+var map_follow_extent := 64.0:
+	set(v):
+		map_follow_extent = maxf(v, 16.0)
+		invalidate_map()
+## Follow-camera map: the water's effect on its surroundings is full within
+## x metres of the camera and gone by y. It follows the camera every frame
+## and ends well inside what the map is guaranteed to cover (half the
+## extent, minus the rebuild distance, minus how far one can travel while a
+## rebuild is in flight), so the edge of the square is never seen.
+var map_follow_fade := Vector2(14.0, 20.0)
 const MAP_REBUILD_DISTANCE := 6.0
 ## Per-frame budget of texel writes for the incremental map rebuild (about
 ## a millisecond of CPU; a full rebuild takes a handful of frames).
@@ -156,6 +192,10 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	# the water's own clock (see water_time): wraps like the engine's TIME so
+	# float precision never degrades in a long session
+	water_time = fmod(water_time + delta, 3600.0)
+	RenderingServer.global_shader_parameter_set("flowing_water_time", water_time)
 	if Engine.is_editor_hint():
 		# in the editor, follow the editor camera so previews work
 		# (via the singleton: EditorInterface does not exist in export templates)
@@ -169,6 +209,10 @@ func _process(delta: float) -> void:
 		if cam != null:
 			_player_pos = cam.global_position
 			_has_focus_pos = true
+	if _has_focus_pos:
+		var fade := map_follow_fade if _map_follows else Vector2(1e6, 2e6)
+		RenderingServer.global_shader_parameter_set("flowing_water_map_focus",
+			Vector4(_player_pos.x, _player_pos.z, fade.x, fade.y))
 	_update_world_map()
 	if _ripples != null:
 		_ripples.focus_position = _player_pos
@@ -252,6 +296,58 @@ func query(pos: Vector3, out: WaterQuery = null) -> WaterQuery:
 var _scratch_query := WaterQuery.new()
 
 ## NAN if there is no water here.
+## The clock every water surface animates by (seconds, wraps at an hour).
+## The shaders read it as the `flowing_water_time` global instead of TIME,
+## so the CPU can reproduce the drawn waves exactly (see drawn_height()).
+var water_time := 0.0
+
+
+## Height of the water surface as it is drawn this frame at a position:
+## the baked level plus the standing waves and wind swell the vertex shader
+## adds (player ripples excepted: they live on the GPU). NAN if no water.
+## Use it where a few centimetres matter, such as whether the camera is
+## under the surface; query()/get_height() give the mean level.
+func drawn_height(pos: Vector3, q: WaterQuery = null) -> float:
+	if q == null:
+		q = query(pos, WaterQuery.new())
+	if not q.valid:
+		return NAN
+	if q.body != null and q.body.has_method("drawn_height"):
+		var h: float = q.body.drawn_height(pos, water_time)
+		if not is_nan(h):
+			return h
+	return q.height
+
+
+## Bilinear sample of one channel of the water noise texture at a texture
+## UV (repeating), the way the shaders' textureLod(noise_tex, uv, 0) does.
+func sample_noise(uv: Vector2, channel: int) -> float:
+	if _noise_img == null:
+		if noise_texture == null:
+			return 0.5
+		_noise_img = noise_texture.get_image()
+		if _noise_img == null:
+			return 0.5
+		if _noise_img.is_compressed():
+			_noise_img.decompress()
+	var w := _noise_img.get_width()
+	var h := _noise_img.get_height()
+	var x := uv.x * w - 0.5
+	var y := uv.y * h - 0.5
+	var x0 := floori(x)
+	var y0 := floori(y)
+	var fx := x - x0
+	var fy := y - y0
+	var c00: float = _noise_img.get_pixel(posmod(x0, w), posmod(y0, h))[channel]
+	var c10: float = _noise_img.get_pixel(posmod(x0 + 1, w), posmod(y0, h))[channel]
+	var c01: float = _noise_img.get_pixel(posmod(x0, w), posmod(y0 + 1, h))[channel]
+	var c11: float = _noise_img.get_pixel(posmod(x0 + 1, w), posmod(y0 + 1, h))[channel]
+	return lerpf(lerpf(c00, c10, fx), lerpf(c01, c11, fx), fy)
+
+
+var _noise_img: Image
+
+
 func get_height(pos: Vector3) -> float:
 	return query(pos, _scratch_query).height
 
@@ -418,36 +514,64 @@ func _update_world_map() -> void:
 		_set_map_inactive()
 		return
 	if _build == null:
-		var texel := MAP_EXTENT / float(_map_size)
-		var want_origin := Vector2(
-			snappedf(_player_pos.x - MAP_EXTENT * 0.5, texel),
-			snappedf(_player_pos.z - MAP_EXTENT * 0.5, texel))
-		if _map_valid_for_bodies and _map_active \
-				and (_map_origin + Vector2.ONE * MAP_EXTENT * 0.5).distance_to(want_origin + Vector2.ONE * MAP_EXTENT * 0.5) < MAP_REBUILD_DISTANCE:
-			return
-		# which bodies reach into the window? (skip everything when none do)
-		var window := AABB(Vector3(want_origin.x, -1e5, want_origin.y), Vector3(MAP_EXTENT, 2e5, MAP_EXTENT))
+		var whole := _whole_scene_window()
+		_map_follows = whole.size.x <= 0.0
+		var extent := whole.size.x
+		var n := 0
+		var texel := 0.0
+		var want_origin := Vector2(whole.position.x, whole.position.z)
+		if _map_follows:
+			extent = map_follow_extent
+			n = _map_size
+			texel = extent / float(n)
+			want_origin = Vector2(
+				snappedf(_player_pos.x - extent * 0.5, texel),
+				snappedf(_player_pos.z - extent * 0.5, texel))
+			if _map_valid_for_bodies and _map_active and is_equal_approx(_map_extent, extent) \
+					and _map_origin.distance_to(want_origin) < MAP_REBUILD_DISTANCE:
+				return
+		else:
+			# built once; again only when a body changes (re-bake, move)
+			if _map_valid_for_bodies and _map_active:
+				return
+			n = int(ceilf(extent / map_texel))
+			texel = map_texel
+			if n > map_max_size:
+				n = map_max_size
+				texel = extent / float(n)
+		var window := AABB(Vector3(want_origin.x, -1e5, want_origin.y), Vector3(extent, 2e5, extent))
 		_build_bodies.clear()
+		var lowest := INF
 		for body in _bodies:
-			if body.has_method("splat_water_map") and body.has_method("get_water_aabb") \
-					and window.intersects(body.get_water_aabb().grow(3.0)):
+			if not (body.has_method("splat_water_map") and body.has_method("get_water_aabb")):
+				continue
+			var aabb: AABB = body.get_water_aabb()
+			if window.intersects(aabb.grow(3.0)):
 				_build_bodies.append(body)
+				lowest = minf(lowest, aabb.position.y)
 		if _build_bodies.is_empty():
 			_set_map_inactive()
 			return
 		# ponds first: rivers blend over them in junction zones
 		_build_bodies.sort_custom(func(a, b): return a is WaterPond and not (b is WaterPond))
 		_build = MapBuild.new()
-		_build.n = _map_size
+		_build.n = n
+		_build_extent = extent
 		_build.ox = want_origin.x
 		_build.oz = want_origin.y
 		_build.texel = texel
-		_build.base = _player_pos.y
+		# The height channel is (height - base) * 0.5 + 2 and anything at or
+		# below 0 reads as "no water", so the base must lie under every
+		# water surface in the window. It used to be the camera height:
+		# after walking down a waterfall the map built from the top could
+		# not hold the river 4 m below, the bed below rendered dry (bright)
+		# and turned wet (dark) as a whole square at the next rebuild.
+		_build.base = lowest - 1.0
 		_build.buf = PackedFloat32Array()
-		_build.buf.resize(_map_size * _map_size * 4)
+		_build.buf.resize(n * n * 4)
 		# resize() zero-fills: flow must read as "none" (0.5), height/depth 0
 		var k := 0
-		var total := _map_size * _map_size * 4
+		var total := n * n * 4
 		while k < total:
 			_build.buf[k] = 0.5
 			_build.buf[k + 1] = 0.5
@@ -455,8 +579,10 @@ func _update_world_map() -> void:
 		_build_idx = 0
 		_build_cursor = 0
 		return
-	# continue the build within this frame's budget
-	var budget := MAP_TEXELS_PER_FRAME
+	# continue the build within this frame's budget (the whole-scene map is
+	# built in one go: it happens at load and after a re-bake, both of which
+	# already take a moment, and a half-built map would show)
+	var budget := MAP_TEXELS_PER_FRAME if _map_follows else 1 << 30
 	while budget > 0 and _build_idx < _build_bodies.size():
 		var body = _build_bodies[_build_idx]
 		if not is_instance_valid(body):
@@ -481,13 +607,14 @@ func _update_world_map() -> void:
 		else:
 			_map_tex.update(img)
 		_map_origin = Vector2(_build.ox, _build.oz)
+		_map_extent = _build_extent
 		_map_base = _build.base
 		_map_active = true
 		_map_valid_for_bodies = true
 		_build = null
 		RenderingServer.global_shader_parameter_set("flowing_water_map", _map_tex)
 		RenderingServer.global_shader_parameter_set("flowing_water_map_rect",
-			Vector4(_map_origin.x, _map_origin.y, MAP_EXTENT, 1.0))
+			Vector4(_map_origin.x, _map_origin.y, _map_extent, 1.0))
 		RenderingServer.global_shader_parameter_set("flowing_water_map_base", _map_base)
 
 
@@ -497,7 +624,35 @@ func map_texture() -> ImageTexture:
 
 
 func map_rect() -> Vector4:
-	return Vector4(_map_origin.x, _map_origin.y, MAP_EXTENT, 1.0 if _map_active else 0.0)
+	return Vector4(_map_origin.x, _map_origin.y, _map_extent, 1.0 if _map_active else 0.0)
+
+
+var _map_extent := 64.0
+var _build_extent := 64.0
+var _map_follows := false
+
+
+## The square the whole-scene map covers (every body's water, plus a margin
+## for wet banks), or an empty AABB when the follow-camera map is used.
+func _whole_scene_window() -> AABB:
+	if map_mode != MapMode.WHOLE_SCENE:
+		return AABB()
+	var box := AABB()
+	var first := true
+	for body in _bodies:
+		if not body.has_method("get_water_aabb"):
+			continue
+		var a: AABB = body.get_water_aabb()
+		box = a if first else box.merge(a)
+		first = false
+	if first:
+		return AABB()
+	box = box.grow(4.0)
+	var side := maxf(box.size.x, box.size.z)
+	if side / map_texel > map_max_size * 4:
+		return AABB()    # too large for one map: follow the camera
+	return AABB(Vector3(box.position.x, 0.0, box.position.z), Vector3(side, 0.0, side))
+
 
 
 func map_base() -> float:
@@ -535,6 +690,10 @@ var sun_light: DirectionalLight3D
 ## The camera counts as "in the water" from this far above the surface, so
 ## the waterline can cross the screen before the eye itself goes under.
 const UNDERWATER_MARGIN := 0.08
+## The underwater pass runs while the eye is within this much of the drawn
+## surface (above it) and decides pixel by pixel; covers the player ripples
+## (at most 0.12 m) and the lens's near plane.
+const UNDERWATER_REACH := 0.3
 
 var _underwater_effect: UnderwaterEffect
 var _underwater_was_active := false
@@ -547,15 +706,19 @@ var _env_fog_backup := {}
 var _env_fog_env: Environment
 
 
-## True while the camera is in a water body (the underwater view is drawn).
+## True while the camera's eye is under the water surface as drawn.
 func is_camera_underwater() -> bool:
-	return _underwater_was_active
+	return _camera_under
+
+
+var _camera_under := false
 
 
 func _underwater_off() -> void:
 	if _underwater_effect != null:
 		_underwater_effect.active = false
 	_underwater_was_active = false
+	_camera_under = false
 	_set_env_fog(null, false)
 
 
@@ -567,9 +730,18 @@ func _update_underwater(delta: float) -> void:
 		return
 	var pos := cam.global_position
 	var q := query(pos, _scratch_query)
-	var height := q.height
+	# The surface as drawn (waves included), not the baked mean level: the
+	# two differ by a standing wave's height, and with the eye between them
+	# the view was neither under water nor above it (the surface seen from
+	# below, the sky through it, no fog).
+	var height := drawn_height(pos, q)
 	var flow := q.flow
 	var under: bool = q.valid and pos.y < height + UNDERWATER_MARGIN
+	# The pass runs from a little higher up: it finds the waterline pixel by
+	# pixel (player ripples included), and a pass over a dry view only
+	# returns early. Nothing is left to one height test at the eye.
+	var near: bool = q.valid and pos.y < height + UNDERWATER_REACH
+	_camera_under = under
 	var style: WaterStyle = null
 	if under and q.body != null and "style" in q.body:
 		style = q.body.style
@@ -587,10 +759,12 @@ func _update_underwater(delta: float) -> void:
 		var fx := cam.compositor.compositor_effects
 		fx.append(_underwater_effect)
 		cam.compositor.compositor_effects = fx
-	_underwater_effect.active = under
-	if under:
+	if near and style == null and q.body != null and "style" in q.body:
+		style = q.body.style
+	_underwater_effect.active = near
+	if near:
 		_feed_underwater(pos, height, flow, style, delta)
-	_underwater_was_active = under
+	_underwater_was_active = near
 
 
 ## Turns the style of the water the camera is in into the effect's numbers.
@@ -636,8 +810,9 @@ func _feed_underwater(pos: Vector3, height: float, flow: Vector3, style: WaterSt
 
 	# --- the surface above the camera: a plane with the river's slope -----------
 	var grad := Vector2.ZERO
-	var hx := get_height(pos + Vector3(1.0, 0.0, 0.0))
-	var hz := get_height(pos + Vector3(0.0, 0.0, 1.0))
+	# (both ends as drawn: the height here includes the wave under the eye)
+	var hx := drawn_height(pos + Vector3(1.0, 0.0, 0.0))
+	var hz := drawn_height(pos + Vector3(0.0, 0.0, 1.0))
 	if not is_nan(hx):
 		grad.x = clampf(hx - height, -0.15, 0.15)
 	if not is_nan(hz):
@@ -726,6 +901,8 @@ const SHADER_GLOBALS := {
 	"flowing_water_map": ["sampler2D", ""],
 	"flowing_water_map_rect": ["vec4", Vector4(0, 0, 1, 0)],
 	"flowing_water_map_base": ["float", 0.0],
+	"flowing_water_map_focus": ["vec4", Vector4(0, 0, 1e6, 2e6)],
+	"flowing_water_time": ["float", 0.0],
 	"flowing_water_ripple": ["sampler2D", ""],
 	"flowing_water_ripple_rect": ["vec4", Vector4(0, 0, 1, 0)],
 	"flowing_water_caustics": ["float", 1.0],

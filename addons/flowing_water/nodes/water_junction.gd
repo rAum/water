@@ -10,9 +10,14 @@ extends Node3D
 ##   1. the river end snaps to the pond level, flattened over the last metres;
 ##   2. the river's last baked row becomes the pond's inflow (or the pond's
 ##      speed seeds the outgoing river), so "Bake" here bakes both in order;
-##   3. over the blend length the river ribbon extends into the pond and
-##      fades out, drawn above the pond (render_priority + 2 mm lift), with
-##      style parameters blending from river values to pond values.
+##   3. the river ribbon cross-fades with the pond only where the pond's
+##      surface lies under it (inside the shore), so no strip of half-faded
+##      water ever hangs over bare channel; its sides fade too, so it leaves
+##      no edge on open water. Where the two overlap the river is drawn
+##      above the pond (render_priority + OVERLAP_LIFT, its own surface
+##      offset flattened to the pond's level) so the two never fight for
+##      depth, and its style blends from river values to pond values over
+##      the same metres.
 
 enum Direction { RIVER_INTO_POND, POND_INTO_RIVER }
 
@@ -32,11 +37,21 @@ enum Direction { RIVER_INTO_POND, POND_INTO_RIVER }
 @export_range(1.0, 12.0) var blend_length := 4.0:
 	set(v):
 		blend_length = v
+		_cache_valid = false
 		_update_blend()
 ## Metres of river flattened to meet the pond level without a kink.
 @export_range(1.0, 20.0) var flatten_length := 6.0
 
+## Height of the river over the pond where the two overlap: enough that
+## the pond's own small waves and offsets never poke through it.
+const OVERLAP_LIFT := 0.03
+## The river starts to fade this far inside the shore.
+const FADE_START := 0.15
+
 var _extension: MeshInstance3D
+# cached shore crossing: x = arc length, y/z = fade range inside the shore
+var _cache := Vector3.ZERO
+var _cache_valid := false
 
 signal baked
 
@@ -88,6 +103,10 @@ func _connect_bodies() -> void:
 	if pond != null:
 		pond.register_junction(self)
 	_update_blend()
+	# the river's mesh carries the overlap fade: rebuild it now that it
+	# knows its pond (the river may have been built before this node)
+	if river != null and river.is_node_ready():
+		river.rebuild_mesh()
 	update_configuration_warnings()
 
 
@@ -240,18 +259,17 @@ func _update_blend() -> void:
 	var pond := get_pond()
 	if river == null or pond == null or river.curve == null:
 		return
-	var length: float = river.curve.get_baked_length()
+	refresh_cache()
+	var fade := _fade_range()
+	var s0 := shore_offset()
+	# the style blends over the same metres the ribbon fades over: by the
+	# time the river is gone it already looks like the pond
+	var span := maxf(fade.y - FADE_START, 0.5)
 	if direction == Direction.RIVER_INTO_POND:
-		# the ribbon extends into the pond and fades out; the river is drawn
-		# on top with a small lift so the two surfaces never flicker
-		river.set_blend_uniforms(length - blend_length, blend_length, 0.002,
-			length, blend_length, pond.style)
+		river.set_blend_uniforms(s0, span, OVERLAP_LIFT, 0.0, 0.0, pond.style)
 	else:
-		# reversed: pond style at the start of the river, fading to the
-		# river's own; the ribbon itself fades in over the same metres, so
-		# the pond underneath carries the look up to the lip
-		river.set_blend_uniforms(blend_length, -blend_length, 0.002,
-			0.0, 0.0, pond.style, blend_length)
+		# reversed: pond style at the start of the river, its own downstream
+		river.set_blend_uniforms(s0, -span, OVERLAP_LIFT, 0.0, 0.0, pond.style)
 	var rm := river.surface_material()
 	if rm != null:
 		rm.render_priority = 1
@@ -262,19 +280,99 @@ func _update_blend() -> void:
 		_build_extension()
 
 
+## Recomputes the cached shore crossing (after the river or pond moved).
+func refresh_cache() -> void:
+	_cache_valid = false
+	_cache = Vector3(_shore_offset_uncached(), 0.0, 0.0)
+	var tip := _tip_inside()
+	_cache.y = FADE_START
+	_cache.z = clampf(tip - 0.25, FADE_START + 0.6, FADE_START + blend_length)
+	_cache_valid = true
+
+
+## Arc length along the river where its centre line crosses into the pond
+## (FADE_START inside the shore).
+func shore_offset() -> float:
+	if not _cache_valid:
+		refresh_cache()
+	return _cache.x
+
+
+func _shore_offset_uncached() -> float:
+	var river := get_river()
+	var pond := get_pond()
+	if river == null or pond == null or river.curve == null:
+		return 0.0
+	var length: float = river.curve.get_baked_length()
+	var into := direction == Direction.RIVER_INTO_POND
+	# walk from the junction end back out of the pond
+	var s := length if into else 0.0
+	var step := 0.1
+	while s >= 0.0 and s <= length:
+		var p: Vector3 = river.global_transform * river.frame_at(s)["pos"]
+		if pond.inside_distance(p) < FADE_START:
+			break
+		s += -step if into else step
+	return clampf(s, 0.0, length)
+
+
+## How far inside the shore the ribbon's tip lies (the tip of the extension
+## for an inlet, the river's first row for an outlet).
+func _tip_inside() -> float:
+	var river := get_river()
+	var pond := get_pond()
+	if river == null or pond == null or river.curve == null:
+		return 0.0
+	if direction == Direction.RIVER_INTO_POND:
+		var f := river.end_frame()
+		var dir: Vector3 = f["dir"]
+		dir.y = 0.0
+		return pond.inside_distance(f["pos"] + dir.normalized() * blend_length)
+	return pond.inside_distance(river.global_transform * river.frame_at(0.0)["pos"])
+
+
+## (start, end) of the fade, in metres inside the shore: it ends just before
+## the ribbon's tip, so the tip itself is never seen as a line.
+func _fade_range() -> Vector2:
+	if not _cache_valid:
+		refresh_cache()
+	return Vector2(_cache.y, _cache.z)
+
+
+## Per-vertex junction weights for the river ribbon at a world position:
+## x = opacity (COLOR.r), y = overlap mask (COLOR.g: lift above the pond,
+## river offset flattened). `side_m` is the distance to the ribbon's side.
+func overlap_weights(world_pos: Vector3, side_m: float) -> Vector2:
+	var pond := get_pond()
+	if pond == null:
+		return Vector2(1.0, 0.0)
+	var inside := pond.inside_distance(world_pos)
+	if inside < -(WaterPond.SKIRT + 1.5):
+		return Vector2(1.0, 0.0)
+	var fr := _fade_range()
+	var fade := 1.0 - smoothstep(fr.x, fr.y, inside)
+	# over open pond water the ribbon's sides fade as well
+	fade *= lerpf(1.0, smoothstep(0.0, 0.6, side_m), smoothstep(0.0, 0.8, inside))
+	# lifted wherever the pond's surface (its skirt included) may lie under it
+	var lift := smoothstep(-(WaterPond.SKIRT + 1.2), -WaterPond.SKIRT + 0.1, inside)
+	return Vector2(fade, lift)
+
+
 ## Weight of the river in blended queries near its tail.
 func river_tail_weight(river: WaterRiver, s: float) -> float:
 	if direction != Direction.RIVER_INTO_POND or river.curve == null:
 		return 1.0
-	var length: float = river.curve.get_baked_length()
-	return clampf((length - s) / maxf(blend_length, 0.01), 0.0, 1.0)
+	# matches what is drawn: the river gives way to the pond inside the shore
+	var span := maxf(_fade_range().y - FADE_START, 0.5)
+	return 1.0 - clampf((s - shore_offset()) / span, 0.0, 1.0)
 
 
 ## Weight of an outgoing river in blended queries near its start.
 func river_head_weight(river: WaterRiver, s: float) -> float:
 	if direction != Direction.POND_INTO_RIVER:
 		return 1.0
-	return clampf(s / maxf(blend_length, 0.01), 0.0, 1.0)
+	var span := maxf(_fade_range().y - FADE_START, 0.5)
+	return 1.0 - clampf((shore_offset() - s) / span, 0.0, 1.0)
 
 
 ## The river ribbon continued into the pond for the blend length, fading out.
@@ -292,12 +390,12 @@ func _build_extension() -> void:
 	dir.y = 0.0
 	dir = dir.normalized()
 	var side := Vector3(dir.z, 0.0, -dir.x)
-	var hw: float = f["half_width"] + 0.4
+	var hw: float = f["half_width"] + WaterRiver.MARGIN
 	var level := pond.water_level()
 	var length: float = river.curve.get_baked_length()
 
-	var rows := 9
-	var ax := 13
+	var rows := 13
+	var ax := 25
 	var pos := PackedVector3Array()
 	var nrm := PackedVector3Array()
 	var tan := PackedFloat32Array()
@@ -307,16 +405,20 @@ func _build_extension() -> void:
 	for r in rows:
 		var t := float(r) / float(rows - 1)
 		var center := c + dir * t * blend_length
-		center.y = lerpf(c.y, level, t * t * (3.0 - 2.0 * t)) + 0.002
+		center.y = lerpf(c.y, level, t * t * (3.0 - 2.0 * t))
 		for i in ax:
 			var u := float(i) / float(ax - 1)
 			var d := -hw + u * 2.0 * hw
-			pos.append(center + side * d)
+			var p := center + side * d
+			pos.append(p)
 			nrm.append(Vector3.UP)
 			tan.append_array([dir.x, dir.y, dir.z, 1.0])
 			uv.append(Vector2(u, 1.0))
 			uv2.append(Vector2(d, length + t * blend_length))
-			col.append(Color(1.0 - t, 1.0, 0.0))
+			# the same weights as the river's own last row: no seam where
+			# the ribbon becomes the extension
+			var w := overlap_weights(p, hw - absf(d))
+			col.append(Color(w.x, w.y, 0.0))
 	var idx := PackedInt32Array()
 	for r in rows - 1:
 		for i in ax - 1:

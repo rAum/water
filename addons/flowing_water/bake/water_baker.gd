@@ -15,6 +15,11 @@ extends RefCounted
 ## is the fallback and the reference.
 
 const SOLID_EPSILON := 0.03          # depth <= this means solid ground
+# Inside the channel (not connected to a bank) a rock this close under the
+# surface is an obstacle too: the drawn surface dips by a few centimetres
+# in fast water, so it shows, and the water has to go round it.
+const OBSTACLE_EPSILON := 0.07
+const MAX_DRAWDOWN := 0.07           # deepest the drawn surface dips (m)
 const MAX_SPEED := 7.0
 const MANNING_K := 25.0              # prototype: 25 * depth^(2/3) * sqrt(S)
 const GRAVITY2 := 19.62              # 2 * g
@@ -133,6 +138,12 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 	# --- solids and obstacles -------------------------------------------------
 	# An obstacle is a solid cell with water on both sides across the row; a
 	# solid cell connected to the bank is not.
+	# (a falling sheet is thin everywhere: no shallow-rock rule on falls)
+	var near_fall := PackedByteArray()
+	near_fall.resize(nz)
+	for fl in falls:
+		for jj in range(maxi(int(fl["j_lip"]) - int(fl["win"]) - 4, 0), mini(int(fl["j_foot"]) + 4, nz)):
+			near_fall[jj] = 1
 	for j in nz:
 		var row := j * nx
 		for i in nx:
@@ -146,8 +157,20 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 		while i2 >= 0 and solid[row + i2] == 1:
 			i2 -= 1
 		var right_start := i2
+		# shallows that run out from a bank are the bank's slope; only a
+		# shallow patch with deeper water between it and both banks is a rock
+		var sl_end := 0
+		while sl_end < nx and depth[row + sl_end] <= OBSTACLE_EPSILON:
+			sl_end += 1
+		var sr_start := nx - 1
+		while sr_start >= 0 and depth[row + sr_start] <= OBSTACLE_EPSILON:
+			sr_start -= 1
+		var rocks_ok := not p.pond_mode and near_fall[j] == 0
 		for i in nx:
-			obst[row + i] = 1 if (solid[row + i] == 1 and i >= left_end and i <= right_start) else 0
+			var inside := i >= left_end and i <= right_start
+			if rocks_ok and i > sl_end and i < sr_start and depth[row + i] <= OBSTACLE_EPSILON:
+				solid[row + i] = 1
+			obst[row + i] = 1 if (solid[row + i] == 1 and inside) else 0
 
 	# --- 1. Manning first guess, scaled to constant discharge ------------------
 	_report(progress, 0.06, "Initial speeds")
@@ -179,6 +202,13 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 
 	# --- 2. Pressure projection on face fluxes ---------------------------------
 	_report(progress, 0.12, "Setting up pressure solve")
+	var h_ref := 0.0
+	var n_wet := 0
+	for k in nc:
+		if solid[k] == 0:
+			h_ref += depth[k]
+			n_wet += 1
+	h_ref = h_ref / float(n_wet) if n_wet > 0 else 0.3
 	# FZ: (nz+1) x nx fluxes between rows; FX: nz x (nx+1) fluxes across.
 	var fz := PackedFloat32Array()
 	fz.resize((nz + 1) * nx)
@@ -209,11 +239,12 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 				var a := (j - 1) * nx + i
 				var b := j * nx + i
 				if solid[a] == 0 and solid[b] == 0:
-					kz[j * nx + i] = data.row_cell_width[j] / dz
+					kz[j * nx + i] = data.row_cell_width[j] / dz * _depth_k(depth[a], depth[b], h_ref)
 		for j in nz:
 			for i in range(1, nx):
-				if solid[j * nx + i - 1] == 0 and solid[j * nx + i] == 0:
-					kx[j * (nx + 1) + i] = dz / data.row_cell_width[j]
+				var kl := j * nx + i - 1
+				if solid[kl] == 0 and solid[kl + 1] == 0:
+					kx[j * (nx + 1) + i] = dz / data.row_cell_width[j] * _depth_k(depth[kl], depth[kl + 1], h_ref)
 		# Inflow carries momentum: seed a decaying jet from every inlet cell
 		# along the river's direction. The projection below then makes the
 		# whole field mass-conserving, which turns the jet into a fan at the
@@ -286,10 +317,13 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 					kz[f] = 0.0
 				elif fb == -2.0:
 					fz[f] = fa
-					kz[f] = dx_a / dz          # outlet: open
+					# outlet: open
+					var a_out := (j - 1) * nx + i
+					kz[f] = dx_a / dz * _depth_k(depth[a_out], depth[a_out], h_ref)
 				else:
 					fz[f] = 0.5 * (fa + fb)
-					kz[f] = 0.5 * (dx_a + dx_b) / dz
+					kz[f] = 0.5 * (dx_a + dx_b) / dz \
+						* _depth_k(depth[(j - 1) * nx + i], depth[j * nx + i], h_ref)
 		for j in nz:
 			for i in nx + 1:
 				var g := j * (nx + 1) + i
@@ -297,7 +331,8 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 				if i == 0 or i == nx or solid[j * nx + i - 1] == 1 or solid[j * nx + i] == 1:
 					kx[g] = 0.0
 				else:
-					kx[g] = dz / data.row_cell_width[j]
+					kx[g] = dz / data.row_cell_width[j] \
+						* _depth_k(depth[j * nx + i - 1], depth[j * nx + i], h_ref)
 		for j in nz:
 			for i in nx:
 				var k := j * nx + i
@@ -629,7 +664,7 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 			# the Bernoulli surface offset fades out as the water goes into
 			# free fall
 			var free_fall := smoothstep(p.waterfall_threshold * 0.5, p.waterfall_threshold * 1.5, s2)
-			tmp2[k] = (clampf(0.6 * (vm * vm - sp * sp) / GRAVITY2, -0.12, 0.12) - wake[k] * 0.05) * (1.0 - free_fall)
+			tmp2[k] = clampf(0.6 * (vm * vm - sp * sp) / GRAVITY2 - wake[k] * 0.03, -MAX_DRAWDOWN, 0.12) * (1.0 - free_fall)
 			if air[k] == 1:
 				tmp2[k] = 0.0
 	# pond plunge points (waterfall landing)
@@ -643,6 +678,15 @@ static func bake(data: WaterData, p: BakeParams, progress: Callable = Callable()
 	off.resize(nc)
 	_blur(tmp, foam, solid, nx, nz)
 	_blur(tmp2, off, solid, nx, nz)
+	# The drawn surface must agree with the solve about what is under
+	# water. Pulled down by more than half the local depth, it would bare
+	# the top of a rock that the solve treated as covered, and the current
+	# would then be drawn running straight into (and over) a rock that
+	# visibly stands out of the water. (Banks and brinks are drawn down to
+	# the bed on purpose below; those come after this.)
+	for k in nc:
+		if solid[k] == 0 and air[k] == 0:
+			off[k] = maxf(off[k], -0.5 * maxf(depth[k] - SOLID_EPSILON, 0.0))
 
 	# the surface draws down toward a brink: the flow speeds up and thins
 	# over the last metre before it goes over
@@ -926,6 +970,15 @@ static func _find_brinks(data: WaterData, depth: PackedFloat32Array, fall_row: P
 
 
 # ------------------------------------------------------------------ helpers --
+
+## Face conductance factor for the pressure projection. Water is carried
+## in proportion to how deep it is (flux = depth x speed): a face between
+## two shallow cells passes far less than one in the channel, so the
+## projection sends the water AROUND a rock's shallow shoulders instead of
+## over them. Relative to the mean depth so the solve stays well scaled.
+static func _depth_k(da: float, db: float, h_ref: float) -> float:
+	return clampf(0.5 * (maxf(da, 0.0) + maxf(db, 0.0)) / maxf(h_ref, 0.05), 0.08, 3.0)
+
 
 static func _report(progress: Callable, frac: float, phase: String) -> void:
 	if progress.is_valid():

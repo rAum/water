@@ -119,9 +119,19 @@ enum Variant { REALISTIC, STYLIZED }
 		emit_changed()
 
 @export_group("Foam")
-@export var foam_color: Color = Color(0.92, 0.95, 0.96):
+## Colour of the bubbles themselves: keep it a near-neutral white. The water
+## under and between the bubbles tints it (see foam_water_tint), and the scene
+## lighting does the rest, so the same foam colour works for every water.
+@export var foam_color: Color = Color(0.93, 0.93, 0.91):
 	set(v):
 		foam_color = v
+		emit_changed()
+## How much the water body colours its foam: 0 = foam_color as is, 1 = thin
+## foam takes the full colour of light that has passed through the water (tea
+## brown on peat water, ochre on mud, faint green on a clear stream).
+@export_range(0.0, 1.0) var foam_water_tint: float = 0.6:
+	set(v):
+		foam_water_tint = v
 		emit_changed()
 @export_range(0.0, 1.6) var foam_amount: float = 1.0:
 	set(v):
@@ -143,12 +153,41 @@ enum Variant { REALISTIC, STYLIZED }
 		foam_tile_size = v
 		emit_changed()
 
+@export_group("Still water")
+## Ponds and lakes (bodies with wind ripples): metres of wave height the wind
+## raises at the body's default wind (WaterPond.wind_ripples = 0.4). Moves the
+## vertices on Medium/High; 0 = a flat surface.
+@export_range(0.0, 0.1) var wind_wave_height: float = 0.015:
+	set(v):
+		wind_wave_height = v
+		emit_changed()
+## Strength of the wind wavelets in the surface normal (the glitter and the
+## broken reflections of a breezy lake). 0 = glassy.
+@export_range(0.0, 2.0) var wind_wave_detail: float = 1.0:
+	set(v):
+		wind_wave_detail = v
+		emit_changed()
+## Foam left by small waves lapping along the shore of still water.
+@export_range(0.0, 1.0) var shore_foam: float = 0.5:
+	set(v):
+		shore_foam = v
+		emit_changed()
+## Foam carried in by a river and drifting out over still water, thinning as
+## the current slows.
+@export_range(0.0, 1.0) var inflow_foam: float = 0.6:
+	set(v):
+		inflow_foam = v
+		emit_changed()
+
 @export_group("Light")
 @export_range(0.0, 1.0) var roughness: float = 0.08:
 	set(v):
 		roughness = v
 		emit_changed()
-@export_range(0.0, 1.0) var specular: float = 0.5:
+## Reflectance at normal incidence (Godot's specular: F0 = 0.16 * s^2).
+## Water reflects about 2 % head-on, which is 0.35; grazing views reflect
+## fully whatever this is. Higher values make shaded water mirror too much sky.
+@export_range(0.0, 1.0) var specular: float = 0.36:
 	set(v):
 		specular = v
 		emit_changed()
@@ -196,6 +235,11 @@ func apply_to_material(mat: ShaderMaterial, prefix: String = "style_") -> void:
 	mat.set_shader_parameter(prefix + "refraction", refraction_strength)
 	mat.set_shader_parameter(prefix + "foam_color", Vector3(foam_color.r, foam_color.g, foam_color.b))
 	mat.set_shader_parameter(prefix + "foam_amount", foam_amount)
+	mat.set_shader_parameter(prefix + "foam_water_tint", foam_water_tint)
+	mat.set_shader_parameter(prefix + "wind_wave_height", wind_wave_height)
+	mat.set_shader_parameter(prefix + "wind_wave_detail", wind_wave_detail)
+	mat.set_shader_parameter(prefix + "shore_foam", shore_foam)
+	mat.set_shader_parameter(prefix + "inflow_foam", inflow_foam)
 	mat.set_shader_parameter(prefix + "foam_softness", 0.02 if hard_foam_edge else foam_softness)
 	mat.set_shader_parameter(prefix + "foam_tile", foam_tile_size)
 	mat.set_shader_parameter(prefix + "roughness", roughness)

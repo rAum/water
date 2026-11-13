@@ -18,6 +18,11 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 
 WaterManager="*uid://djslnvhmnnjwc"
 
+[display]
+
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/flowing_water/plugin.cfg")
@@ -45,6 +50,14 @@ flowing_water_map_rect={
 flowing_water_map_base={
 "type": "float",
 "value": 0.0
+}
+flowing_water_time={
+"type": "float",
+"value": 0.0
+}
+flowing_water_map_focus={
+"type": "vec4",
+"value": Vector4(0, 0, 1e+06, 2e+06)
 }
 flowing_water_ripple={
 "type": "sampler2D",

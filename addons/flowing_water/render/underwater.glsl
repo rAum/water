@@ -213,18 +213,26 @@ void main() {
 					// sharpest a hand's depth down, fading in the deep and in silt
 					float focus = smoothstep(0.03, 0.3, column) * exp(-column * 0.25)
 						* exp(-sed * column * 2.0) * smoothstep(0.02, 0.25, sun.y);
-					if (full) {
-						// surfaces that face away from the sun get almost none
+					{
+						// Surfaces that face away from the sun get almost none,
+						// and steep ones little: the network is cast from above,
+						// so on a vertical face it only draws streaks. (Both
+						// quality modes: this is what keeps rock faces and legs
+						// from being striped.)
 						vec2 px = 1.0 / size;
 						vec3 vx = view_pos(suv + vec2(px.x, 0.0), textureLod(depth_tex, suv + vec2(px.x, 0.0), 0.0).x) - vp;
 						vec3 vy = view_pos(suv + vec2(0.0, px.y), textureLod(depth_tex, suv + vec2(0.0, px.y), 0.0).x) - vp;
 						vec3 n = normalize(cam_basis * cross(vx, vy));
 						n *= sign(-dot(n, ray));
 						float jump = max(abs(vx.z), abs(vy.z)) / max(dist * px_angle, 1e-5);
-						float facing = clamp(dot(n, sun) * 1.4 + 0.25, 0.12, 1.0);
-						focus *= mix(facing, 1.0, smoothstep(8.0, 30.0, jump));
+						float facing = clamp(dot(n, sun) * 1.4 + 0.25, 0.12, 1.0)
+							* mix(0.15, 1.0, smoothstep(0.35, 0.8, n.y));
+						// across a silhouette the normal is meaningless: no light
+						focus *= mix(facing, 0.3, smoothstep(8.0, 30.0, jump));
 					}
-					col *= 1.0 + caus * p.caustics.x * focus * 1.3;
+					// lines bright, gaps a little darker: a pattern on the bed
+					// rather than a brightening that burns rocks out to white
+					col *= max(1.0 + (caus - 0.18) * p.caustics.x * focus * 1.1, 0.0);
 				}
 				col *= exp(-p.downwelling.rgb * column * 0.6);
 			}

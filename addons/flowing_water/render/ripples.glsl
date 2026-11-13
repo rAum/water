@@ -80,12 +80,21 @@ void main() {
 	// land neighbours reflect a little less (soft wall): damp where shallow
 	hn *= smoothstep(0.0, 0.05, depth);
 
+	// A disturbance pushes water aside, it does not remove it: the kernel
+	// is a dip with a raised rim and zero net volume ((1 - x) e^-x over the
+	// plane integrates to 0). A plain dip took a little water out of the
+	// grid with every step and footfall, and the deficit (nothing restores
+	// the mean level of a wave equation) piled up into a trough that
+	// reached the bed around a wading player, and spread as sharp rings.
 	for (int i = 0; i < pc.inj_count; i++) {
 		vec2 d = world - inj[i].xy;
-		float r2 = inj[i].z * inj[i].z;
-		float g = exp(-dot(d, d) / max(r2, 1e-4));
-		hn -= inj[i].w * g;
+		float x = dot(d, d) / max(inj[i].z * inj[i].z, 1e-4);
+		hn -= inj[i].w * (1.0 - x) * exp(-x);
 	}
-	hn = clamp(hn, -0.35, 0.35);
+	// whatever mean offset is left (border losses, clamping) relaxes back
+	// to the rest level instead of drifting
+	hn -= h * 0.0015;
+	// ripples, not breakers: a few centimetres at most
+	hn = clamp(hn, -0.12, 0.12);
 	imageStore(out_img, id, vec4(hn, h, 0.0, 0.0));
 }

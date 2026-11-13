@@ -27,7 +27,7 @@ extends Node3D
 @export var angular_drag := 1.6
 ## Drag toward the water's velocity: how quickly the body takes on the
 ## speed of the current.
-@export var flow_drag := 3.5
+@export var flow_drag := 2.4
 ## When the body runs aground or jams against a rock while the water around
 ## it is moving, nudge it toward deeper water (like a real log working free).
 @export var unstick := true
@@ -43,6 +43,7 @@ var _sleep_check := 0.0
 var _low_rate_accum := 0.0
 var _auto_draft := 0.06
 var _stuck_time := 0.0
+var _last_wet_time := -100000
 
 signal entered_water(speed: float)
 signal exited_water()
@@ -157,7 +158,13 @@ func _physics_process(delta: float) -> void:
 		var point_vel: Vector3 = _body.linear_velocity + _body.angular_velocity.cross(arm)
 		var rel: Vector3 = q.flow - point_vel
 		var immersion := clampf(sub / rest_draft, 0.2, 1.0)
-		var drag := Vector3(rel.x, 0.0, rel.z) * flow_drag * mass / n_points * immersion
+		# Water drag grows with the square of the relative speed: a body
+		# barely slower than the current is carried along, and one that
+		# is shoved coasts instead of stopping dead (a purely linear drag
+		# made a floating log harder to push than one lying on the bank).
+		var rel_h := Vector3(rel.x, 0.0, rel.z)
+		var k_drag := flow_drag * clampf(0.25 + 0.75 * rel_h.length(), 0.25, 1.8)
+		var drag := rel_h * k_drag * mass / n_points * immersion
 		drag.y = -point_vel.y * vertical_damping * mass / n_points * immersion
 		var force := up + drag
 		# clamp per point so nothing explodes
@@ -184,23 +191,34 @@ func _physics_process(delta: float) -> void:
 		mgr.query(_body.global_position, q)
 		var beached: bool = q.valid and _body.global_position.y - q.height < 0.45 \
 			and q.flow.length() > 0.25
-		_body.can_sleep = not beached
+		# stranded right beside the water (on a rock or the edge of a bar
+		# where there is no water under it at all): slide back toward it
+		var to_water := Vector3.ZERO
+		if not q.valid and _was_in_water_recently():
+			to_water = _nearest_water(mgr, q)
+		_body.can_sleep = not beached and to_water == Vector3.ZERO
 		if beached:
 			_body.sleeping = false
 			var nudge := _work_free(mgr, q, q.flow, mass, delta)
 			net_force += nudge[0]
 			net_torque += nudge[1]
+		elif to_water != Vector3.ZERO:
+			_body.sleeping = false
+			_stuck_time += delta
+			net_force += (to_water + Vector3.UP * 0.5) * mass * 3.0 * minf(_stuck_time, 3.0)
 		else:
 			_stuck_time = 0.0
 	_body.constant_force = net_force
 	_body.constant_torque = net_torque
 
 	in_water = any_submerged
+	if any_submerged:
+		_last_wet_time = Time.get_ticks_msec()
 	if any_submerged and not _was_in_water:
 		var speed: float = _body.linear_velocity.length()
 		entered_water.emit(speed)
 		if inject_ripples:
-			mgr.add_ripple(_body.global_position, clampf(0.02 + speed * 0.02, 0.02, 0.16), 0.5)
+			mgr.add_ripple(_body.global_position, clampf(0.015 + speed * 0.015, 0.015, 0.1), 0.5)
 	elif not any_submerged and _was_in_water:
 		exited_water.emit()
 	_was_in_water = any_submerged
@@ -211,6 +229,28 @@ func _physics_process(delta: float) -> void:
 		if _sleep_check > 0.12:
 			_sleep_check = 0.0
 			mgr.add_ripple(_body.global_position, 0.012, 0.35)
+
+
+func _was_in_water_recently() -> bool:
+	return Time.get_ticks_msec() - _last_wet_time < 20000
+
+
+## Horizontal direction to the closest water within about a metre, or zero.
+func _nearest_water(mgr: Node, q) -> Vector3:
+	var pos := _body.global_position
+	for r in [0.5, 1.0]:
+		var best := Vector3.ZERO
+		var best_depth := 0.08
+		for n in 8:
+			var a := TAU * float(n) / 8.0
+			var dir := Vector3(cos(a), 0.0, sin(a))
+			mgr.query(pos + dir * r, q)
+			if q.valid and q.depth > best_depth:
+				best_depth = q.depth
+				best = dir
+		if best != Vector3.ZERO:
+			return best
+	return Vector3.ZERO
 
 
 ## Ran aground or jammed against a rock while the water is moving: slide

@@ -12,6 +12,12 @@ extends Node3D
 
 const MAX_GRID := 512
 const DEFAULT_CELL := 0.25
+## The surface reaches this far past the outline. An outline is a polygon of
+## straight chords drawn by hand: the real shore (where the ground rises out
+## of the water) lies a little inside or outside it. The water is drawn and
+## baked over this band too, and the depth buffer ends it exactly where the
+## bank comes out of the water - no dry strip under a cut-off surface.
+const SKIRT := 0.7
 
 ## Closed outline in the node's local XZ plane.
 @export var outline: PackedVector2Array = PackedVector2Array([
@@ -105,16 +111,16 @@ func rebuild_mesh() -> void:
 		_mesh_instance = null
 	if outline.size() < 3:
 		return
+	var shore := skirt_outline()
 	# densify the outline (shore detail) and scatter interior points
 	var pts := PackedVector2Array()
-	for n in outline.size():
-		var a := outline[n]
-		var b := outline[(n + 1) % outline.size()]
+	for n in shore.size():
+		var a := shore[n]
+		var b := shore[(n + 1) % shore.size()]
 		var len := a.distance_to(b)
-		var steps := maxi(1, int(len / 0.9))
+		var steps := maxi(1, int(len / 0.6))
 		for s in steps:
 			pts.append(a.lerp(b, float(s) / float(steps)))
-	var outline_count := pts.size()
 	var aabb := _outline_rect()
 	var spacing := clampf(maxf(aabb.size.x, aabb.size.y) / 24.0, 0.8, 4.0)
 	var y := aabb.position.y + spacing * 0.5
@@ -123,8 +129,8 @@ func rebuild_mesh() -> void:
 		var odd := false
 		while x < aabb.end.x:
 			var p := Vector2(x, y + (spacing * 0.25 if odd else 0.0))
-			if Geometry2D.is_point_in_polygon(p, outline) \
-					and _distance_to_outline(p) > spacing * 0.35:
+			if Geometry2D.is_point_in_polygon(p, shore) \
+					and _distance_to_polygon(p, shore) > spacing * 0.35:
 				pts.append(p)
 			x += spacing
 			odd = not odd
@@ -170,7 +176,7 @@ func rebuild_mesh() -> void:
 		var b := tris[t + 1]
 		var c := tris[t + 2]
 		var centroid := (pts[a] + pts[b] + pts[c]) / 3.0
-		if Geometry2D.is_point_in_polygon(centroid, outline):
+		if Geometry2D.is_point_in_polygon(centroid, shore):
 			idx.append(a)
 			idx.append(c)
 			idx.append(b)
@@ -198,12 +204,46 @@ func rebuild_mesh() -> void:
 
 
 func _distance_to_outline(p: Vector2) -> float:
+	return _distance_to_polygon(p, outline)
+
+
+static func _distance_to_polygon(p: Vector2, poly: PackedVector2Array) -> float:
 	var best := INF
-	for n in outline.size():
-		var a := outline[n]
-		var b := outline[(n + 1) % outline.size()]
+	for n in poly.size():
+		var a := poly[n]
+		var b := poly[(n + 1) % poly.size()]
 		best = minf(best, p.distance_to(Geometry2D.get_closest_point_to_segment(p, a, b)))
 	return best
+
+
+## The outline grown by SKIRT: the area the surface is drawn and baked over.
+func skirt_outline() -> PackedVector2Array:
+	if outline.size() < 3:
+		return outline
+	var grown := Geometry2D.offset_polygon(outline, SKIRT, Geometry2D.JOIN_ROUND)
+	var best := outline
+	var best_area := -1.0
+	for poly: PackedVector2Array in grown:
+		if Geometry2D.is_polygon_clockwise(poly) != Geometry2D.is_polygon_clockwise(outline) and grown.size() > 1:
+			continue
+		var r := Rect2(poly[0], Vector2.ZERO)
+		for q in poly:
+			r = r.expand(q)
+		if r.get_area() > best_area:
+			best_area = r.get_area()
+			best = poly
+	return best
+
+
+## Signed horizontal distance from the outline: positive inside the pond,
+## negative outside.
+func inside_distance(world_pos: Vector3) -> float:
+	if outline.size() < 3:
+		return -INF
+	var local := to_local(world_pos)
+	var p2 := Vector2(local.x, local.z)
+	var d := _distance_to_outline(p2)
+	return d if Geometry2D.is_point_in_polygon(p2, outline) else -d
 
 
 func _outline_rect() -> Rect2:
@@ -215,7 +255,7 @@ func _outline_rect() -> Rect2:
 
 ## Bake grid over the outline bounds: default 0.25 m cells, capped 512x512.
 func _grid_info() -> Dictionary:
-	var r := _outline_rect().grow(0.5)
+	var r := _outline_rect().grow(SKIRT + 0.5)
 	var cell := DEFAULT_CELL
 	var nx := int(ceil(r.size.x / cell))
 	var nz := int(ceil(r.size.y / cell))
@@ -258,11 +298,14 @@ func prepare_bake_data() -> WaterData:
 		data.row_half_width[j] = nx * cell * 0.5
 	data.depth.resize(nx * nz)
 	var space := get_world_3d().direct_space_state
+	var shore := skirt_outline()
 	for j in nz:
 		for i in nx:
 			var local := Vector2(origin.x + (float(i) + 0.5) * cell, origin.y + (float(j) + 0.5) * cell)
 			var dep := 0.0
-			if Geometry2D.is_point_in_polygon(local, outline):
+			# (past the outline too: the depth there says where the bank
+			# really comes out of the water - negative on dry ground)
+			if Geometry2D.is_point_in_polygon(local, shore):
 				var world := Vector3(gpos.x + local.x, gpos.y, gpos.z + local.y)
 				if space != null:
 					var ray := PhysicsRayQueryParameters3D.create(
@@ -455,6 +498,54 @@ func query_water(world_pos: Vector3) -> Array:
 	return [height, flow, depth, 1.0]
 
 
+## Height of the surface as the vertex shader draws it at time `t`
+## (WaterManager.water_time): level, baked offset, standing waves and the
+## wind's swell, term for term as in water_surface_body.gdshaderinc.
+## NAN outside the pond.
+func drawn_height(world_pos: Vector3, t: float) -> float:
+	var r := query_water(world_pos)
+	if r.is_empty():
+		return NAN
+	var level := global_position.y
+	if baked_data == null or not baked_data.is_valid():
+		return level
+	var d := baked_data
+	var fi := (world_pos.x - d.grid_origin.x) / d.cell_length - 0.5
+	var fj := (world_pos.z - d.grid_origin.z) / d.cell_length - 0.5
+	var depth := d.sample_array(d.depth, fi, fj)
+	var foam := d.sample_array(d.foam, fi, fj)
+	var off := d.sample_array(d.surface_offset, fi, fj)
+	var speed := Vector2(d.sample_array(d.vel_across, fi, fj), d.sample_array(d.vel_along, fi, fj)).length()
+	var shore := smoothstep(0.02, 0.2, depth)
+	var mgr := get_tree().root.get_node_or_null("WaterManager") if is_inside_tree() else null
+	var m := Vector2(world_pos.x, world_pos.z)   # v_metric (UV2) = world xz
+	var wave_amp := style.standing_wave_height if style != null else 0.08
+	var amp := wave_amp * (0.3 + 1.2 * foam) * clampf(speed / 2.0, 0.0, 1.3) * shore
+	amp *= 0.85 + 0.15 * sin(t * 1.7 + m.y * 2.0)
+	var h0 := 0.0
+	if mgr != null:
+		h0 = mgr.sample_noise(Vector2(m.x * 0.22, m.y * 0.16 - t * 0.02), 2) - 0.5
+	var lift := (off + h0 * 2.0 * amp + 0.02 * foam) * shore
+	# wind swell: wind_waves(p, t, wind_dir, 1).x / WIND_WAVE_REF_H, first train only
+	if wind_ripples > 0.001 and mgr != null:
+		var wd := Vector2(0.6, 0.8).normalized()
+		var warp := Vector2(
+			mgr.sample_noise(m * 0.045 + t * wd * 0.004, 0),
+			mgr.sample_noise(m * 0.045 + t * wd * 0.004, 1)) - Vector2(0.5, 0.5)
+		var lambda := 5.5
+		var ang := -1.4 * 0.42
+		var steep := 0.11
+		var wdir := Vector2(wd.x * cos(ang) - wd.y * sin(ang), wd.x * sin(ang) + wd.y * cos(ang))
+		var k := TAU / lambda
+		var omega := sqrt(9.81 * k)
+		var ph := wdir.dot(m) * k - omega * t + warp.x * 6.0
+		var wh := (steep / k) * sin(ph) / 0.096
+		var ww_h := style.wind_wave_height if style != null else 0.015
+		var calm := 1.0 - clampf(speed / 0.6, 0.0, 1.0)
+		lift += wh * ww_h * (wind_ripples / 0.4) * calm * shore * smoothstep(0.1, 0.5, depth)
+	return level + lift
+
+
 ## Water level beside a position on the shore (within `margin` metres of
 ## the outline), NAN otherwise. Used for wet banks.
 func surface_height_near(world_pos: Vector3, margin: float = 2.5) -> float:
@@ -513,7 +604,7 @@ func splat_water_map(build, cursor: int, budget: int) -> Vector2i:
 
 
 func get_water_aabb() -> AABB:
-	var r := _outline_rect()
+	var r := _outline_rect().grow(SKIRT)
 	return AABB(global_position + Vector3(r.position.x, -4.0, r.position.y),
 		Vector3(r.size.x, 5.0, r.size.y))
 
