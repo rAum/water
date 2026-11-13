@@ -14,6 +14,37 @@ GDScript and shaders: no GDExtension, nothing to compile.
   <img src="https://img.shields.io/badge/Godot-4.7-478cbf" alt="Godot 4.7">
 </p>
 
+## In motion
+
+<table>
+  <tr>
+    <td><img src="docs/images/clip_wade.gif" alt="Wading down a stream: ripples, a wake and floating logs drifting past" width="320"></td>
+    <td><img src="docs/images/clip_fall.gif" alt="Stepping into the waterfall: the falling sheet parts around the body" width="320"></td>
+  </tr>
+  <tr>
+    <td align="center">Wading: ripples, wake, the current's push</td>
+    <td align="center">Step into a waterfall and the sheet parts around you</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/clip_shove.gif" alt="Running into a floating log knocks it away" width="320"></td>
+    <td><img src="docs/images/clip_carry.gif" alt="Picking up a log and throwing it into the stream" width="320"></td>
+  </tr>
+  <tr>
+    <td align="center">Shove floating logs</td>
+    <td align="center">Pick them up and throw them back in</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/clip_styles.gif" alt="Cycling through the water style presets on the same pool" width="320"></td>
+    <td><img src="docs/images/clip_flow.gif" alt="Raising the river's discharge: the flow is re-baked live and runs faster and whiter" width="320"></td>
+  </tr>
+  <tr>
+    <td align="center">Eight style presets, from glacial to muddy to toon</td>
+    <td align="center">More water: the flow is re-baked live</td>
+  </tr>
+</table>
+
+Recorded in the demo with [`tools/make_gifs.sh`](tools/make_gifs.sh).
+
 ## Install
 
 1. Copy [`addons/flowing_water/`](addons/flowing_water) into your project's

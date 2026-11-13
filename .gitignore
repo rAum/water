@@ -30,6 +30,7 @@ mono_crash.*.json
 
 # Development output
 tools/shots/
+tools/clips/
 
 # Local editor tooling, not part of this project
 addons/ziva_agent/
