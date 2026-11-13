@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b83rn2ppnjaaq"
+path="res://.godot/imported/bake_pressure.glsl-b10b6f560986d86a77267537c46aca7c.res"
+
+[deps]
+
+source_file="res://addons/flowing_water/bake/bake_pressure.glsl"
+dest_files=["res://.godot/imported/bake_pressure.glsl-b10b6f560986d86a77267537c46aca7c.res"]
+
+[params]
+
