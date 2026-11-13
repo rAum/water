@@ -10,16 +10,21 @@ extends Node3D
 
 const NEAR_DISTANCE := 45.0
 const SPRAY_BASE_COUNT := 500
-const MIST_BASE_COUNT := 320
+const MIST_BASE_COUNT := 420
+const IMPACT_BASE_COUNT := 420
 const TABLE_SIZE := 256
 
 var _spray: GPUParticles3D
 var _mist: GPUParticles3D
 var _fall: GPUParticles3D
+var _impact: GPUParticles3D
 var _check_accum := 0.0
 
 
-static func build_for(owner_node: Node3D, segments: Array[WaterData]) -> WaterSprayFactory:
+## foot_pts / foot_dirs: where falls hit their pools (as drawn by the
+## river mesh), with the downstream direction and landing speed (in y).
+static func build_for(owner_node: Node3D, segments: Array[WaterData],
+		foot_pts := PackedVector3Array(), foot_dirs := PackedVector3Array()) -> WaterSprayFactory:
 	var spray_pts := PackedVector3Array()
 	var spray_w := PackedFloat32Array()
 	var spray_v := PackedVector3Array()
@@ -35,7 +40,7 @@ static func build_for(owner_node: Node3D, segments: Array[WaterData]) -> WaterSp
 		spray_w.append_array(data.spray_weights)
 		spray_v.append_array(data.spray_velocities)
 		mist_pts.append_array(data.mist_points)
-	if spray_pts.is_empty() and mist_pts.is_empty() and fall_pts.is_empty():
+	if spray_pts.is_empty() and mist_pts.is_empty() and fall_pts.is_empty() and foot_pts.is_empty():
 		return null
 	var node := WaterSprayFactory.new()
 	node.name = "Spray"
@@ -50,6 +55,18 @@ static func build_for(owner_node: Node3D, segments: Array[WaterData]) -> WaterSp
 		node._fall = node._make_emitter(
 			_importance_table(fall_pts, fw, fall_vel), 2.0,
 			clampi(fall_pts.size() * 8, 80, 2400), 0.8, 0.4)
+	if not foot_pts.is_empty():
+		# the impact: puffs of white spray thrown up where the sheet hits
+		var fw := PackedFloat32Array()
+		fw.resize(foot_pts.size())
+		fw.fill(1.0)
+		node._impact = node._make_emitter(
+			_importance_table(foot_pts, fw, foot_dirs), 3.0,
+			clampi(foot_pts.size() * 10, 60, IMPACT_BASE_COUNT), 1.5, 0.5)
+		# and the mist rises mostly from there, not from the whole pool
+		for n in foot_pts.size():
+			for rep_n in 3:
+				mist_pts.append(foot_pts[n])
 	if not mist_pts.is_empty():
 		var w := PackedFloat32Array()
 		w.resize(mist_pts.size())
@@ -115,7 +132,7 @@ func _make_emitter(table: ImageTexture, kind: float, count: int,
 	em.lifetime = lifetime
 	em.local_coords = false
 	em.draw_pass_1 = _make_draw_mesh(kind)
-	if kind > 1.5:
+	if kind > 1.5 and kind < 2.5:
 		# falling drops are streaks: the quad's Y axis follows the velocity
 		em.transform_align = GPUParticles3D.TRANSFORM_ALIGN_Z_BILLBOARD_Y_TO_VELOCITY
 	em.custom_aabb = AABB(Vector3(-2000, -2000, -2000), Vector3(4000, 4000, 4000))
@@ -141,7 +158,7 @@ static func _soft_circle() -> Texture2D:
 func _make_draw_mesh(kind: float) -> QuadMesh:
 	var quad := QuadMesh.new()
 	quad.size = Vector2.ONE
-	if kind > 1.5:
+	if kind > 1.5 and kind < 2.5:
 		var dm := ShaderMaterial.new()
 		dm.shader = load("res://addons/flowing_water/render/water_droplet.gdshader")
 		quad.material = dm
@@ -149,6 +166,22 @@ func _make_draw_mesh(kind: float) -> QuadMesh:
 	var m := StandardMaterial3D.new()
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if kind > 0.5:
+		# mist and impact spray are clouds of fine drops: lit by the sun
+		# (darker in shade) and glowing when the sun is behind them -
+		# drops scatter light forward
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		m.backlight_enabled = true
+		m.backlight = Color(0.75, 0.78, 0.8)
+		m.roughness = 1.0
+		m.metallic_specular = 0.0
+		m.emission_enabled = true
+		m.emission = Color(0.16, 0.18, 0.2)   # sky light from all around
+		# a camera standing in the mist must not look through a veil of
+		# sprites stacked on its lens: puffs fade out as they come close
+		m.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+		m.distance_fade_min_distance = 0.6
+		m.distance_fade_max_distance = 3.0
 	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 	# without this the particle's own scale is dropped and every droplet
 	# is drawn as a 1 m quad
@@ -158,8 +191,8 @@ func _make_draw_mesh(kind: float) -> QuadMesh:
 	m.no_depth_test = false
 	# soft particles: fade where the sprite meets water, rocks or banks
 	m.proximity_fade_enabled = true
-	m.proximity_fade_distance = 0.5 if (kind > 0.5 and kind < 1.5) else 0.08
-	m.disable_receive_shadows = true
+	m.proximity_fade_distance = 0.5 if (kind > 0.5 and kind < 1.5) else (0.3 if kind > 2.5 else 0.08)
+	m.disable_receive_shadows = kind < 0.5
 	quad.material = m
 	return quad
 
@@ -175,7 +208,7 @@ func _process(delta: float) -> void:
 	var mgr := get_tree().root.get_node_or_null("WaterManager")
 	var amount: float = mgr.spray_amount() if mgr != null else 1.0
 	var wind: Vector3 = mgr.get_wind(global_position) if mgr != null else Vector3(0.4, 0, 0.3)
-	for em: GPUParticles3D in [_spray, _mist, _fall]:
+	for em: GPUParticles3D in [_spray, _mist, _fall, _impact]:
 		if em == null:
 			continue
 		var near := false

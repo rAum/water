@@ -4,7 +4,9 @@
 // Spray and mist from baked emission points (port of the prototype's
 // SPRAY_VS). kind 0 = short droplets at rocks, kind 1 = slow mist at falls,
 // kind 2 = water falling with a waterfall (born with the water's velocity,
-// drawn by water_droplet.gdshader as streaks along that velocity).
+// drawn by water_droplet.gdshader as streaks along that velocity),
+// kind 3 = impact: puffs of spray thrown up where a fall hits its pool
+// (row 1 then holds the downstream direction in xz, landing speed in y).
 // points_tex row 0: xyz = world position, w = unused (list is already
 // importance-expanded on the CPU); row 1: xyz = water velocity at the point.
 shader_type particles;
@@ -29,9 +31,27 @@ void start() {
 		int idx = int(prand(seed) * float(point_count - 1) + 0.5);
 		vec3 p = texelFetch(points_tex, ivec2(idx, 0), 0).xyz;
 		vec3 wv = texelFetch(points_tex, ivec2(idx, 1), 0).xyz;
-		p.x += (prand(seed) - 0.5) * 0.5;
-		p.z += (prand(seed) - 0.5) * 0.5;
-		if (kind > 1.5) {
+		float jit = kind > 2.5 ? 0.18 : 0.5;
+		p.x += (prand(seed) - 0.5) * jit;
+		p.z += (prand(seed) - 0.5) * jit;
+		if (kind > 2.5) {
+			// impact: the falling water bursts back up off the pool. Most
+			// puffs only jump a little; a few are thrown high and far
+			// downstream. They are as fast as the water that lands.
+			vec2 dn = wv.xz;
+			float land = clamp(wv.y / 7.0, 0.4, 1.4);
+			float r = prand(seed);
+			float up = (0.6 + 2.8 * r * r) * land;
+			vec2 side = vec2(-dn.y, dn.x) * (prand(seed) - 0.5) * 1.6;
+			vec2 fwd = dn * (0.2 + 1.4 * prand(seed)) * land;
+			VELOCITY = vec3(fwd.x + side.x, up, fwd.y + side.y);
+			p.y += 0.05;
+			float s = 0.16 + 0.3 * prand(seed);
+			TRANSFORM = mat4(vec4(s, 0, 0, 0), vec4(0, s, 0, 0), vec4(0, 0, s, 0), vec4(p, 1.0));
+			// (its own density goes in CUSTOM.w below: COLOR is its albedo)
+			COLOR = vec4(0.97, 0.98, 0.99, 0.0);
+			drop_w = 0.4 + 0.6 * prand(seed);
+		} else if (kind > 1.5) {
 			// falling water: leaves the sheet with the water's own velocity
 			// (width and opacity vary: many fine drops, a few heavy ones)
 			p.y += 0.05 - prand(seed) * 0.15;
@@ -54,8 +74,8 @@ void start() {
 		} else {
 			// mist: slow, grows, drifts with the wind
 			p.y += 0.1 + prand(seed) * 0.4;
-			VELOCITY = vec3((prand(seed) - 0.5) * 0.5, 0.2 + prand(seed) * 0.5, (prand(seed) - 0.5) * 0.5);
-			float s = 0.35 + prand(seed) * 0.6;
+			VELOCITY = vec3((prand(seed) - 0.5) * 0.7, 0.35 + prand(seed) * 0.7, (prand(seed) - 0.5) * 0.7);
+			float s = 0.4 + prand(seed) * 0.7;
 			TRANSFORM = mat4(vec4(s, 0, 0, 0), vec4(0, s, 0, 0), vec4(0, 0, s, 0), vec4(p, 1.0));
 			COLOR = vec4(0.96, 0.98, 0.99, 0.05);
 		}
@@ -69,7 +89,17 @@ void process() {
 	float t = CUSTOM.y / max(LIFETIME * CUSTOM.z, 0.01);
 	t = min(t, 1.0);
 	CUSTOM.y += DELTA;
-	if (kind < 0.5 || kind > 1.5) {
+	if (kind > 2.5) {
+		// a puff of spray: heavy drops fall back, the fine ones it is made
+		// of hang in the air - it decelerates hard and swells as it spreads
+		VELOCITY.y -= 5.5 * DELTA;
+		VELOCITY *= 1.0 - DELTA * 1.6;
+		VELOCITY += wind * DELTA * 0.3;
+		float g = 1.0 + DELTA * 1.1;
+		TRANSFORM[0].xyz *= g;
+		TRANSFORM[1].xyz *= g;
+		TRANSFORM[2].xyz *= g;
+	} else if (kind < 0.5 || kind > 1.5) {
 		VELOCITY.y -= 9.8 * DELTA;
 	} else {
 		VELOCITY = mix(VELOCITY, wind + vec3(0.0, 0.05, 0.0), DELTA * 0.6);
@@ -81,7 +111,10 @@ void process() {
 	}
 	// fade in fast, fade out over life
 	float a = (1.0 - t) * smoothstep(0.0, 0.12, t);
-	if (kind > 1.5) {
+	if (kind > 2.5) {
+		// dense at the burst, thinning as it spreads
+		COLOR.a = CUSTOM.w * 0.55 * (1.0 - t) * (1.0 - t) * smoothstep(0.0, 0.05, t);
+	} else if (kind > 1.5) {
 		// falling water is seen as a streak: as long as the distance it
 		// covers while the eye (or the shutter) holds it, so it lengthens as
 		// it speeds up. Air drag slows the finest drops a little.
@@ -95,6 +128,6 @@ void process() {
 		// is fainter
 		COLOR.a = a * COLOR.r * clamp(w * 3.0 / len + 0.35, 0.0, 1.0);
 	} else {
-		COLOR.a = a * (kind < 0.5 ? 0.7 : 0.035);
+		COLOR.a = a * (kind < 0.5 ? 0.7 : 0.045);
 	}
 }

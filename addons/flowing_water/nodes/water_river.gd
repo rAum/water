@@ -91,6 +91,10 @@ var _spray: Node3D
 var _junction_a: Node = null   # junction at the start, if any
 var _junction_b: Node = null   # junction at the end, if any
 var _hash_check_accum := 0.0
+# world points along the feet of the falls, as drawn, and per point the
+# downstream direction (world xz) with the landing speed in y
+var _foot_points := PackedVector3Array()
+var _foot_dirs := PackedVector3Array()
 
 signal baked
 
@@ -351,6 +355,8 @@ func rebuild_mesh() -> void:
 		if is_instance_valid(c):
 			c.queue_free()
 	_chunks.clear()
+	_foot_points.clear()
+	_foot_dirs.clear()
 	_chunk_segments = PackedInt32Array()
 	if curve == null or curve.get_baked_length() < 1.0:
 		return
@@ -634,6 +640,12 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 			if (r > 0 and state[q - ax] == 1) or (i > 0 and state[q - 1] == 1) \
 					or (i < ax - 1 and state[q + 1] == 1):
 				col[q].b = 1.0
+				# where the sheet hits the pool: spray and mist rise here
+				if col[q].r > 0.3:
+					var dq := gt.basis * Vector3(tan[q * 4], 0.0, tan[q * 4 + 2])
+					dq = Vector3(dq.x, 0.0, dq.z).normalized()
+					_foot_points.append(gt * pos[q])
+					_foot_dirs.append(Vector3(dq.x, flight[q * 4 + 1], dq.z))
 	# A waterfall is a sheet with thickness: an upper surface (the ribbon)
 	# and a lower one behind it. The sheet is as thick as the flow at the
 	# brink and thins as it speeds up (thickness x speed stays constant); at
@@ -1544,7 +1556,7 @@ func _build_spray() -> void:
 		_spray = null
 	if baked_segments.is_empty():
 		return
-	_spray = WaterSprayFactory.build_for(self, baked_segments)
+	_spray = WaterSprayFactory.build_for(self, baked_segments, _foot_points, _foot_dirs)
 	if _spray != null:
 		add_child(_spray, false, Node.INTERNAL_MODE_BACK)
 

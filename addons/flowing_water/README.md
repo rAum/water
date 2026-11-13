@@ -151,7 +151,14 @@ falls are built:
   in a line. Drops fall alongside with the baked velocity, drawn as soft
   streaks along their own velocity that lengthen as they speed up
   (`render/water_droplet.gdshader`), most of them shed by the thin edges
-  of the sheet; spray, mist and rings keep the pool moving.
+  of the sheet. Along the foot of the sheet as drawn, the falling water
+  bursts back up in puffs of spray (most jump a little, a few are thrown
+  high and downstream, as fast as the water that lands) that brake hard
+  and swell, and mist rises mostly from there and drifts with the wind.
+  Mist and spray are lit (darker in shade, glowing with the sun behind
+  them) and fade out within a few metres of the camera, so standing in
+  the mist does not put a veil over the screen. Rings keep the pool
+  moving.
 - **Bodies in the fall**: a `WaterInteractor` (a character) or a
   `WaterFloater` (a log held in the water) that stands in a falling sheet
   parts it. The water it catches does not fall on: a gap with torn white
