@@ -97,6 +97,21 @@ var quality: Quality = Quality.HIGH:
 		_apply_quality()
 		quality_changed.emit(v)
 
+## Water surfaces are not drawn beyond this many metres from the camera
+## (0 = no limit: the camera's far plane decides). For open worlds, set it
+## to the distance your terrain and fog make sense to: past it every river
+## chunk, pond tile and junction stops costing anything. Surfaces fade out
+## over the last `draw_distance_fade` of the range instead of popping.
+var draw_distance := 0.0:
+	set(v):
+		draw_distance = maxf(v, 0.0)
+		_apply_draw_distance()
+## Fraction of `draw_distance` over which the surface fades out.
+var draw_distance_fade := 0.1:
+	set(v):
+		draw_distance_fade = clampf(v, 0.0, 0.5)
+		_apply_draw_distance()
+
 ## Extra turbidity (0-1) added to every water style at runtime: raise it
 ## after rain or during a flood and all rivers turn muddy together.
 var storm_turbidity := 0.0:
@@ -223,6 +238,15 @@ func _process(delta: float) -> void:
 		RenderingServer.global_shader_parameter_set("flowing_water_map_focus",
 			Vector4(_player_pos.x, _player_pos.z, fade.x, fade.y))
 	_update_world_map()
+	# bodies moved at runtime (a level streamed in at an offset, a moving
+	# platform): the query grid indexes them by position
+	_grid_check_accum += delta
+	if _grid_check_accum > 0.5:
+		_grid_check_accum = 0.0
+		for body in _bodies:
+			if is_instance_valid(body) and _grid_xforms.get(body, body.global_transform) != body.global_transform:
+				_grid_dirty = true
+				break
 	if _ripples != null:
 		_ripples.focus_position = _player_pos
 	if not Engine.is_editor_hint():
@@ -256,6 +280,89 @@ func unregister_junction(j: Node3D) -> void:
 func invalidate_map() -> void:
 	_map_valid_for_bodies = false
 	_build = null
+	_grid_dirty = true
+
+
+## A body's surface changed shape or place (re-mesh): re-index it for queries.
+func invalidate_query_grid() -> void:
+	_grid_dirty = true
+
+
+# ---------------------------------------------------------------- query grid --
+
+## Side of a query-grid cell (m). Each cell lists the bodies whose surface
+## boxes touch it; a query asks only those.
+const QUERY_CELL := 32.0
+const _EMPTY: Array = []
+var _grid: Dictionary = {}           # Vector2i -> Array[Node3D]
+var _grid_always: Array[Node3D] = [] # bodies without boxes: asked everywhere
+var _grid_xforms: Dictionary = {}    # body -> transform when indexed
+var _grid_dirty := true
+var _grid_check_accum := 0.0
+
+func _rebuild_query_grid() -> void:
+	_grid_dirty = false
+	_grid.clear()
+	_grid_always.clear()
+	_grid_xforms.clear()
+	for body in _bodies:
+		if not is_instance_valid(body) or not body.has_method("query_water"):
+			continue
+		_grid_xforms[body] = body.global_transform
+		var boxes: Array = []
+		if body.has_method("get_water_boxes"):
+			boxes = body.get_water_boxes()
+		elif body.has_method("get_water_aabb"):
+			boxes = [body.get_water_aabb()]
+		if boxes.is_empty():
+			_grid_always.append(body)
+			continue
+		for box: AABB in boxes:
+			var b := box.grow(1.0)
+			var c0 := Vector2i(floori(b.position.x / QUERY_CELL), floori(b.position.z / QUERY_CELL))
+			var c1 := Vector2i(floori(b.end.x / QUERY_CELL), floori(b.end.z / QUERY_CELL))
+			for cz in range(c0.y, c1.y + 1):
+				for cx in range(c0.x, c1.x + 1):
+					var k := Vector2i(cx, cz)
+					var list: Array = _grid.get(k, [])
+					if list.is_empty():
+						_grid[k] = list
+					if not list.has(body):
+						list.append(body)
+
+
+# ------------------------------------------------------------------------ LOD --
+
+## Distance at which a surface switches to the cheap `_far` shader: past
+## the point where vertex waves and refraction have faded out in the full one.
+func far_lod_distance() -> float:
+	return vertex_wave_distance() * 1.5 + 50.0
+
+
+func _apply_draw_distance() -> void:
+	for body in _bodies:
+		if is_instance_valid(body) and body.has_method("apply_draw_distance"):
+			body.apply_draw_distance()
+	for j in _junctions:
+		if is_instance_valid(j) and j.has_method("apply_draw_distance"):
+			j.apply_draw_distance()
+
+
+## Applies the water draw distance to one of the water's mesh instances.
+func set_draw_range(gi: GeometryInstance3D) -> void:
+	if gi == null:
+		return
+	if draw_distance <= 0.0:
+		gi.visibility_range_end = 0.0
+		gi.visibility_range_end_margin = 0.0
+		gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+		return
+	var margin := draw_distance * draw_distance_fade
+	gi.visibility_range_end = draw_distance - margin * 0.5
+	gi.visibility_range_end_margin = margin
+	# water is already drawn in the transparent pass: fading costs nothing
+	gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF \
+		if margin > 0.0 else GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 
 
 func get_bodies() -> Array[Node3D]:
@@ -277,8 +384,15 @@ func query(pos: Vector3, out: WaterQuery = null) -> WaterQuery:
 	var flow := Vector3.ZERO
 	var depth := 0.0
 	var best_w := 0.0
-	for body in _bodies:
-		if not body.has_method("query_water"):
+	if _grid_dirty:
+		_rebuild_query_grid()
+	# only the bodies whose surface reaches this cell, not every body in the
+	# world (a river's query walks its curve: far too slow to ask them all)
+	var cell := Vector2i(floori(pos.x / QUERY_CELL), floori(pos.z / QUERY_CELL))
+	var near: Array = _grid.get(cell, _EMPTY)
+	for n in near.size() + _grid_always.size():
+		var body: Node3D = near[n] if n < near.size() else _grid_always[n - near.size()]
+		if not is_instance_valid(body):
 			continue
 		var r: Array = body.query_water(pos)
 		if r.is_empty():

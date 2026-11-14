@@ -4,7 +4,7 @@
 extends Node3D
 ## Look-dev capture tool. Loads a scene, waits for bakes, renders shots.
 ## Run: godot --path . res://tools/screenshot.tscn -- scene=res://... \
-##        shot=name:px,py,pz:lx,ly,lz [shot=...] [wait=3] [debug=N] [style=name] [player=x,y,z] [hide=NodePath]
+##        shot=name:px,py,pz:lx,ly,lz [shot=...] [wait=3] [debug=N] [style=name] [player=x,y,z] [hide=NodePath] [lod_threshold=px]
 
 var scene: Node
 var cam: Camera3D
@@ -54,6 +54,10 @@ func _ready() -> void:
 			_hide.append(a.substr(5))
 		elif a.begins_with("storm="):
 			_storm = float(a.substr(6))
+		elif a.begins_with("lod_threshold="):
+			# mesh LOD switch threshold in pixels (Godot's default is 1):
+			# large values force the coarse distance LODs up close
+			get_viewport().mesh_lod_threshold = float(a.substr(14))
 		elif a.begins_with("quality="):
 			_quality = int(a.substr(8))
 		elif a.begins_with("underwater="):

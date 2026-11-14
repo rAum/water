@@ -45,14 +45,19 @@ const SKIRT := 0.7
 @export_range(0, 3) var debug_view := 0:
 	set(v):
 		debug_view = v
-		if _material != null:
-			_material.set_shader_parameter("debug_view", v)
+		for m in [_material, _far_material]:
+			if m != null:
+				m.set_shader_parameter("debug_view", v)
 
 @export var baked_data: WaterData
 
 var bake_out_of_date := false
 var _material: ShaderMaterial
-var _mesh_instance: MeshInstance3D
+var _far_material: ShaderMaterial
+## The surface, cut into tiles of about TILE_SIZE metres: a lake is not one
+## mesh paying for the full shader out to its far shore.
+var _tiles: Array[MeshInstance3D] = []
+const TILE_SIZE := 48.0
 var _spray: Node3D
 var _junctions: Array[Node] = []
 var _hash_accum := 0.0
@@ -78,6 +83,7 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_lod()
 	if Engine.is_editor_hint():
 		_hash_accum += delta
 		if _hash_accum > 2.0:
@@ -106,9 +112,14 @@ func _mark_dirty() -> void:
 # -------------------------------------------------------------------- meshing --
 
 func rebuild_mesh() -> void:
-	if _mesh_instance != null and is_instance_valid(_mesh_instance):
-		_mesh_instance.queue_free()
-		_mesh_instance = null
+	for t in _tiles:
+		if is_instance_valid(t):
+			t.queue_free()
+	_tiles.clear()
+	_lod_dirty = true
+	var mgr := _manager()
+	if mgr != null and mgr.has_method("invalidate_query_grid"):
+		mgr.invalidate_query_grid()
 	if outline.size() < 3:
 		return
 	var shore := skirt_outline()
@@ -168,8 +179,8 @@ func rebuild_mesh() -> void:
 		uv2[n] = Vector2(gpos.x + p.x, gpos.z + p.y)
 		col[n] = Color(1, 0, 0)
 	# keep only triangles inside the outline, with pond winding flipped so
-	# the surface faces up
-	var idx := PackedInt32Array()
+	# the surface faces up; each goes to the tile its centroid lies in
+	var tile_tris := {}     # Vector2i -> PackedInt32Array
 	var t := 0
 	while t < tris.size():
 		var a := tris[t]
@@ -177,30 +188,107 @@ func rebuild_mesh() -> void:
 		var c := tris[t + 2]
 		var centroid := (pts[a] + pts[b] + pts[c]) / 3.0
 		if Geometry2D.is_point_in_polygon(centroid, shore):
-			idx.append(a)
-			idx.append(c)
-			idx.append(b)
+			var key := Vector2i(floori(centroid.x / TILE_SIZE), floori(centroid.y / TILE_SIZE))
+			var list: PackedInt32Array = tile_tris.get(key, PackedInt32Array())
+			list.append_array([a, c, b])
+			tile_tris[key] = list
 		t += 3
-	if idx.is_empty():
+	if tile_tris.is_empty():
 		return
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = pos
-	arrays[Mesh.ARRAY_NORMAL] = nrm
-	arrays[Mesh.ARRAY_TANGENT] = tan
-	arrays[Mesh.ARRAY_TEX_UV] = uv
-	arrays[Mesh.ARRAY_TEX_UV2] = uv2
-	arrays[Mesh.ARRAY_COLOR] = col
-	arrays[Mesh.ARRAY_INDEX] = idx
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	_mesh_instance = MeshInstance3D.new()
-	_mesh_instance.mesh = mesh
-	_mesh_instance.material_override = _material
-	_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	_mesh_instance.custom_aabb = mesh.get_aabb().grow(0.5)
-	add_child(_mesh_instance, false, Node.INTERNAL_MODE_BACK)
+	for key in tile_tris:
+		# a tile carries only the vertices its triangles use
+		var src: PackedInt32Array = tile_tris[key]
+		var remap := {}
+		var t_pos := PackedVector3Array()
+		var t_nrm := PackedVector3Array()
+		var t_tan := PackedFloat32Array()
+		var t_uv := PackedVector2Array()
+		var t_uv2 := PackedVector2Array()
+		var t_col := PackedColorArray()
+		var idx := PackedInt32Array()
+		idx.resize(src.size())
+		for k in src.size():
+			var v := src[k]
+			if not remap.has(v):
+				remap[v] = t_pos.size()
+				t_pos.append(pos[v])
+				t_nrm.append(nrm[v])
+				t_tan.append_array([tan[v * 4], tan[v * 4 + 1], tan[v * 4 + 2], tan[v * 4 + 3]])
+				t_uv.append(uv[v])
+				t_uv2.append(uv2[v])
+				t_col.append(col[v])
+			idx[k] = remap[v]
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = t_pos
+		arrays[Mesh.ARRAY_NORMAL] = t_nrm
+		arrays[Mesh.ARRAY_TANGENT] = t_tan
+		arrays[Mesh.ARRAY_TEX_UV] = t_uv
+		arrays[Mesh.ARRAY_TEX_UV2] = t_uv2
+		arrays[Mesh.ARRAY_COLOR] = t_col
+		arrays[Mesh.ARRAY_INDEX] = idx
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = _material
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.custom_aabb = mesh.get_aabb().grow(0.5)
+		if mgr != null:
+			mgr.set_draw_range(mi)
+		add_child(mi, false, Node.INTERNAL_MODE_BACK)
+		_tiles.append(mi)
 	_apply_style()
+
+
+# ------------------------------------------------------------------------ LOD --
+
+## Metres the camera moves before the near/far shader choice is re-checked.
+const LOD_RECHECK_MOVE := 2.0
+var _lod_dirty := true
+var _lod_cam := Vector3.INF
+
+
+## Each tile switches to the cheap `_far` shader once its nearest point is
+## past the distance where vertex waves and refraction have faded out of
+## the full one (the same rule and hysteresis as river chunks).
+func _update_lod() -> void:
+	if _tiles.is_empty() or _material == null or _far_material == null:
+		return
+	var cam: Camera3D = null
+	if Engine.is_editor_hint():
+		var ei: Object = Engine.get_singleton("EditorInterface")
+		var vp: Viewport = ei.get_editor_viewport_3d(0) if ei != null else null
+		cam = vp.get_camera_3d() if vp != null else null
+	elif get_viewport() != null:
+		cam = get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var cam_pos := cam.global_position
+	if not _lod_dirty and cam_pos.distance_squared_to(_lod_cam) < LOD_RECHECK_MOVE * LOD_RECHECK_MOVE:
+		return
+	_lod_dirty = false
+	_lod_cam = cam_pos
+	var mgr := _manager()
+	var far_dist: float = mgr.far_lod_distance() if mgr != null else 110.0
+	for tile in _tiles:
+		if not is_instance_valid(tile):
+			continue
+		var box: AABB = tile.global_transform * tile.custom_aabb
+		var nearest := cam_pos.clamp(box.position, box.end)
+		var d := cam_pos.distance_to(nearest)
+		var is_far := tile.material_override == _far_material
+		var want_far := d > (far_dist * 0.9 if is_far else far_dist * 1.1)
+		tile.material_override = _far_material if want_far else _material
+
+
+func apply_draw_distance() -> void:
+	var mgr := _manager()
+	if mgr == null:
+		return
+	for tile in _tiles:
+		if is_instance_valid(tile):
+			mgr.set_draw_range(tile)
 
 
 func _distance_to_outline(p: Vector2) -> float:
@@ -432,6 +520,7 @@ func _check_bake_freshness() -> void:
 
 func _make_material() -> void:
 	_material = ShaderMaterial.new()
+	_far_material = ShaderMaterial.new()
 	_apply_style()
 
 
@@ -442,18 +531,22 @@ func _apply_style() -> void:
 	var variant := style.shader_variant if style != null else WaterStyle.Variant.REALISTIC
 	if mgr != null:
 		_material.shader = mgr.shader_for(variant, false)
+		_far_material.shader = mgr.shader_for(variant, true)
 	else:
 		_material.shader = load("res://addons/flowing_water/render/water_full.gdshader")
-	if style != null:
-		style.apply_to_material(_material)
-		style.apply_to_material(_material, "style_b_")
-	_material.set_shader_parameter("wind_ripple_strength", wind_ripples)
-	_material.set_shader_parameter("debug_view", debug_view)
-	if mgr != null:
-		_material.set_shader_parameter("vertex_wave_max_dist", mgr.vertex_wave_distance())
-		_material.set_shader_parameter("noise_tex", mgr.noise_texture)
-		_material.set_shader_parameter("fall_tex", mgr.fall_texture)
-		_material.set_shader_parameter("foam_tex", mgr.foam_texture)
+		_far_material.shader = load("res://addons/flowing_water/render/water_far.gdshader")
+	for m in [_material, _far_material]:
+		if style != null:
+			style.apply_to_material(m)
+			style.apply_to_material(m, "style_b_")
+		m.set_shader_parameter("wind_ripple_strength", wind_ripples)
+		m.set_shader_parameter("debug_view", debug_view)
+		if mgr != null:
+			m.set_shader_parameter("vertex_wave_max_dist", mgr.vertex_wave_distance())
+			m.set_shader_parameter("noise_tex", mgr.noise_texture)
+			m.set_shader_parameter("fall_tex", mgr.fall_texture)
+			m.set_shader_parameter("foam_tex", mgr.foam_texture)
+	_lod_dirty = true
 	_bind_baked_textures()
 	# rivers that blend into this pond carry its style as their second style
 	for j in _junctions:
@@ -468,8 +561,9 @@ func apply_quality() -> void:
 func _bind_baked_textures() -> void:
 	if baked_data == null or _material == null:
 		return
-	_material.set_shader_parameter("flow_tex", baked_data.flow_tex)
-	_material.set_shader_parameter("aux_tex", baked_data.aux_tex)
+	for m in [_material, _far_material]:
+		m.set_shader_parameter("flow_tex", baked_data.flow_tex)
+		m.set_shader_parameter("aux_tex", baked_data.aux_tex)
 
 
 func surface_material() -> ShaderMaterial:

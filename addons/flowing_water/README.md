@@ -468,6 +468,38 @@ vertex waves and refraction have already faded to zero, so there is no pop.
 Water never stacks: only the junction blend zone is drawn twice. Bodies
 outside camera range skip particles, audio and low-rate their floaters.
 
+### Large and open worlds
+
+What the water does to stay cheap from afar, and the one setting to make:
+
+- **Draw distance**: set `WaterManager.draw_distance` (metres, 0 = no
+  limit, the default) to where your terrain and fog stop. Every river
+  chunk, pond tile and junction gets that visibility range and fades out
+  over the last `draw_distance_fade` (10 %) instead of popping.
+- **Mesh LOD**: each 40 m river chunk carries four coarser index buffers
+  (every 2nd, 4th, 8th, 16th row and column) for Godot's automatic mesh
+  LOD. Rows that a straight interpolation would spoil (falling sheets,
+  their foot, junction fades, plunge churn) stay in every level, and each
+  level declares its real geometric error, so cracks stay below a pixel.
+  The levels start around 160 m on a 1080p screen (well past the vertex
+  waves) and double per level. `rendering/mesh_lod/lod_change/threshold_pixels`
+  and `GeometryInstance3D.lod_bias` tune them as for any mesh.
+- **Pond tiles**: a pond is cut into 48 m tiles, and each tile switches
+  to the far shader by its own nearest point, so a lake no longer pays for
+  the full shader out to its far shore.
+- **Queries** (`WaterManager.query()` and the `get_*` wrappers, floaters,
+  interactors, underwater) look bodies up in a 32 m grid of their chunk
+  boxes instead of asking every body: with 100 rivers in the scene a query
+  costs about 1 µs instead of 350 µs. Bodies moved at runtime are
+  re-indexed within half a second.
+- **The near/far shader check** reruns only after the camera moves 2 m.
+- **Wet bank decals** fade out from 90 m.
+- **The world water map** follows the camera on its own once the water
+  spans more than 8 km (see below).
+
+The baked textures of every body stay in memory while its node is in the
+tree: stream bodies in and out with your own world streaming.
+
 **Renderers**: Forward+ and Mobile are fully supported. Compatibility runs
 with these fallbacks: player ripples **off** (one warning — it has no
 compute shaders; see "Changes from the plan"), bake pressure solve on the

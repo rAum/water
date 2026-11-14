@@ -25,6 +25,9 @@ const PLUNGE_REACH := 1.6
 ## Metres from a pond junction within which the ribbon is checked against
 ## the pond (cross-fade and lift).
 const JUNCTION_REACH := 14.0
+## Metres past an open end (no junction) that queries still find water:
+## the ribbon's margin and one row.
+const END_REACH := MARGIN + ROW_STEP
 
 ## Half width in metres at each curve point.
 @export var widths: PackedFloat32Array = []:
@@ -62,7 +65,8 @@ const JUNCTION_REACH := 14.0
 	set(v):
 		debug_view = v
 		for m in _materials():
-			m.set_shader_parameter("debug_view", v)
+			if m != null:
+				m.set_shader_parameter("debug_view", v)
 
 ## Dark glossy wet strips (Decal nodes) along both banks, for bank materials
 ## you cannot edit. Materials you can edit should use
@@ -358,6 +362,10 @@ func rebuild_mesh() -> void:
 	_foot_points.clear()
 	_foot_dirs.clear()
 	_chunk_segments = PackedInt32Array()
+	_lod_dirty = true
+	var mgr := _manager()
+	if mgr != null and mgr.has_method("invalidate_query_grid"):
+		mgr.invalidate_query_grid()
 	if curve == null or curve.get_baked_length() < 1.0:
 		return
 	var length := curve.get_baked_length()
@@ -415,6 +423,8 @@ static func _bank_decal_texture() -> ImageTexture:
 
 
 var _bank_decals: Array[Decal] = []
+## Wet bank bands fade out from x metres over the next y.
+const BANK_DECAL_FADE := Vector2(90.0, 30.0)
 
 func _rebuild_bank_decals() -> void:
 	for d in _bank_decals:
@@ -432,6 +442,11 @@ func _rebuild_bank_decals() -> void:
 			d.texture_albedo = _bank_decal_texture()
 			d.size = Vector3(4.0, 1.4, 1.6)
 			d.cull_mask = 0xFFFFF
+			# a long river places hundreds of these: past where a dark band
+			# a metre tall is still visible they would only fill the clusters
+			d.distance_fade_enabled = true
+			d.distance_fade_begin = BANK_DECAL_FADE.x
+			d.distance_fade_length = BANK_DECAL_FADE.y
 			var c: Vector3 = f["pos"] + f["side"] * (f["half_width"] + MARGIN * 0.5) * sign_v
 			add_child(d, false, Node.INTERNAL_MODE_BACK)
 			d.position = c + Vector3.UP * 0.35
@@ -687,6 +702,7 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 					idx.append_array([a, a + ax + 1, a + ax, a, a + 1, a + ax + 1])
 				else:
 					idx.append_array([a, a + 1, a + ax, a + 1, a + ax + 1, a + ax])
+	var back_idx := idx.duplicate()
 	for r in rows - 1:
 		for i in ax - 1:
 			var a := r * ax + i
@@ -708,7 +724,8 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 	arrays[Mesh.ARRAY_CUSTOM0] = flight
 	arrays[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {},
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [],
+		_chunk_lods(pos, col, flight, row_air, rows, ax, back_idx),
 		Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -718,9 +735,98 @@ func _build_chunk(row_s: PackedFloat32Array, first: int, last: int) -> void:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	# room for vertex waves and surface offset
 	mi.custom_aabb = mesh.get_aabb().grow(0.6)
+	var mgr := _manager()
+	if mgr != null:
+		mgr.set_draw_range(mi)
 	add_child(mi, false, Node.INTERNAL_MODE_BACK)
 	_chunks.append(mi)
 	_chunk_segments.append(_segment_of(row_s[first]))
+
+
+## Column/row strides of the distance LODs, and the smallest error each one
+## is declared with (m). Godot draws a level once its error shrinks below a
+## pixel; these floors keep even perfectly flat water on the full grid
+## until it is well past the distance where vertex waves have died out
+## (about 160 m for the first level on a 1080p screen, doubling per level).
+const LOD_STRIDES := [2, 4, 8, 16]
+const LOD_ERROR_FLOOR := 0.06       # x stride
+
+## Coarser index buffers over the same vertices, for Godot's automatic mesh
+## LOD: every n-th row and column of the ribbon. Rows that carry detail a
+## straight interpolation would lose (the falling sheet and its foot,
+## junction fades, the plunge churn) are always kept, and so is the sheet's
+## lower surface. Each level's error is the furthest any dropped vertex
+## lies from the coarse surface, so distant water switches without a crack.
+func _chunk_lods(pos: PackedVector3Array, col: PackedColorArray, flight: PackedFloat32Array,
+		row_air: PackedByteArray, rows: int, ax: int, back_idx: PackedInt32Array) -> Dictionary:
+	var lods := {}
+	if rows < 3 or ax < 3:
+		return lods
+	var special := PackedByteArray()
+	special.resize(rows)
+	for r in rows:
+		var keep := row_air[r] == 1 or (r > 0 and row_air[r - 1] == 1) or (r + 1 < rows and row_air[r + 1] == 1)
+		if not keep:
+			for i in ax:
+				var q := r * ax + i
+				var c := col[q]
+				if c.b > 0.0 or c.r < 0.999 or c.g > 0.001 or flight[q * 4 + 3] > 0.01:
+					keep = true
+					break
+		special[r] = 1 if keep else 0
+	var prev_key := 0.0
+	for st: int in LOD_STRIDES:
+		if st >= ax - 1 and st >= rows - 1:
+			break
+		var kc := PackedInt32Array()
+		for i in range(0, ax, st):
+			kc.append(i)
+		if kc[kc.size() - 1] != ax - 1:
+			kc.append(ax - 1)
+		var kr := PackedInt32Array()
+		for r in rows:
+			if r == 0 or r == rows - 1 or r % st == 0 or special[r] == 1:
+				kr.append(r)
+		# the furthest a dropped vertex lies from the coarse surface: along
+		# skipped rows at the edges and the middle (across a plain row the
+		# ribbon is straight), across every column of a kept row
+		var err := 0.0
+		for k in kr.size() - 1:
+			var r0 := kr[k]
+			var r1 := kr[k + 1]
+			for r in range(r0, r1 + 1):
+				var tr := float(r - r0) / float(r1 - r0)
+				var full_row := r == r0 or r == r1
+				for m in kc.size() - 1:
+					var c0 := kc[m]
+					var c1 := kc[m + 1]
+					var cols: Array = range(c0 + 1, c1) if full_row else [c0, (c0 + c1) / 2]
+					for c: int in cols:
+						var tc := float(c - c0) / float(c1 - c0)
+						var top := pos[r0 * ax + c0].lerp(pos[r0 * ax + c1], tc)
+						var bot := pos[r1 * ax + c0].lerp(pos[r1 * ax + c1], tc)
+						err = maxf(err, pos[r * ax + c].distance_to(top.lerp(bot, tr)))
+			# (the last column of skipped rows)
+			for r in range(r0 + 1, r1):
+				var tr := float(r - r0) / float(r1 - r0)
+				var e := pos[r0 * ax + ax - 1].lerp(pos[r1 * ax + ax - 1], tr)
+				err = maxf(err, pos[r * ax + ax - 1].distance_to(e))
+		var idx := back_idx.duplicate()
+		for k in kr.size() - 1:
+			for m in kc.size() - 1:
+				var a := kr[k] * ax + kc[m]
+				var b := kr[k] * ax + kc[m + 1]
+				var c := kr[k + 1] * ax + kc[m]
+				var d := kr[k + 1] * ax + kc[m + 1]
+				# same diagonal choice as the full grid
+				if absf(pos[a].y - pos[d].y) < absf(pos[b].y - pos[c].y) - 0.002:
+					idx.append_array([a, c, d, a, d, b])
+				else:
+					idx.append_array([a, c, b, b, c, d])
+		var key := maxf(maxf(err, LOD_ERROR_FLOOR * float(st)), prev_key * 1.05 + 0.001)
+		lods[key] = idx
+		prev_key = key
+	return lods
 
 
 ## Bilinear sample of a per-cell byte mask (0/1) as a float.
@@ -1216,6 +1322,7 @@ func _refresh_shaders() -> void:
 	else:
 		_material.shader = load(WaterRiver._shader_fallback(variant))
 		_far_material.shader = load("res://addons/flowing_water/render/water_far.gdshader")
+	_lod_dirty = true
 	_bind_baked_textures()
 
 
@@ -1262,6 +1369,7 @@ func _bind_baked_textures() -> void:
 		m.set_shader_parameter("flow_tex", baked_segments[0].flow_tex)
 		m.set_shader_parameter("aux_tex", baked_segments[0].aux_tex)
 	_seg_mats.clear()
+	_lod_dirty = true
 
 
 ## Near/far materials for a segment; segment 0 shares the river materials,
@@ -1282,6 +1390,40 @@ func _segment_materials(seg: int) -> Array:
 
 # ------------------------------------------------------------------------ LOD --
 
+## Metres the camera moves before the near/far shader choice is re-checked.
+const LOD_RECHECK_MOVE := 2.0
+var _lod_dirty := true
+var _lod_cam := Vector3.INF
+
+
+func apply_draw_distance() -> void:
+	var mgr := _manager()
+	if mgr == null:
+		return
+	for c in _chunks:
+		if is_instance_valid(c):
+			mgr.set_draw_range(c)
+
+
+## Boxes covering where this river answers queries (one per chunk, and
+## the pond of each junction, which the ribbon runs on into), for the
+## manager's query grid; empty while there is no mesh (then the river is
+## always asked).
+func get_water_boxes() -> Array:
+	var out := []
+	for c in _chunks:
+		if is_instance_valid(c):
+			out.append(c.global_transform * c.custom_aabb)
+	if out.is_empty():
+		return out
+	for j in [_junction_a, _junction_b]:
+		if j != null and is_instance_valid(j) and j.has_method("get_pond"):
+			var pond = j.get_pond()
+			if pond != null and pond.has_method("get_water_aabb"):
+				out.append(pond.get_water_aabb())
+	return out
+
+
 func _update_lod() -> void:
 	if _chunks.is_empty():
 		return
@@ -1295,14 +1437,21 @@ func _update_lod() -> void:
 		cam = get_viewport().get_camera_3d() if get_viewport() != null else null
 	if cam == null:
 		return
+	# nothing to decide until the camera has moved a little (the switch has
+	# metres of hysteresis) or the chunks/materials changed
+	var cam_pos := cam.global_position
+	if not _lod_dirty and cam_pos.distance_squared_to(_lod_cam) < LOD_RECHECK_MOVE * LOD_RECHECK_MOVE:
+		return
+	_lod_dirty = false
+	_lod_cam = cam_pos
 	var mgr := _manager()
-	var far_dist: float = (mgr.vertex_wave_distance() * 1.5 + 50.0) if mgr != null else 110.0
+	var far_dist: float = mgr.far_lod_distance() if mgr != null else 110.0
 	for n in _chunks.size():
 		var c := _chunks[n]
 		if not is_instance_valid(c):
 			continue
 		var mats := _segment_materials(_chunk_segments[n] if n < _chunk_segments.size() else 0)
-		var d := cam.global_position.distance_to(c.global_transform * c.custom_aabb.get_center())
+		var d := cam_pos.distance_to(c.global_transform * c.custom_aabb.get_center())
 		# hysteresis so the switch never flickers; the far variant only drops
 		# effects that have already faded out by this distance, so no pop
 		var is_far: bool = c.material_override == mats[1]
@@ -1334,6 +1483,18 @@ func query_water(world_pos: Vector3) -> Array:
 	var hw := data.row_half_width[j]
 	if absf(across) > hw:
 		return []
+	# past an open end the clamped last row would answer forever along the
+	# river's axis (an end in a junction runs on into the pond: its weight
+	# below fades it out instead)
+	var past := flat.dot(dir)
+	var at_end := seg == baked_segments.size() - 1 and j >= data.rows - 2 and past > 0.0
+	var at_start := seg == 0 and j == 0 and past < 0.0
+	if (at_end and past > END_REACH and (_junction_b == null or not is_instance_valid(_junction_b))) \
+			or (at_start and past < -END_REACH and (_junction_a == null or not is_instance_valid(_junction_a))):
+		return []
+	# into a junction the ribbon runs on past the curve's end: its weight
+	# fades with how far along that run the point lies, not at the clamped end
+	var s_w := s + past if (at_end or at_start) else s
 	var fi := clampf((across + hw) / (2.0 * hw) * float(data.cells_across) - 0.5,
 		0.0, float(data.cells_across) - 1.001)
 	var depth := data.sample_array(data.depth, fi, fj)
@@ -1349,9 +1510,9 @@ func query_water(world_pos: Vector3) -> Array:
 	# weight fades where a junction extension fades the ribbon out
 	var weight := 1.0
 	if _junction_b != null and _junction_b.has_method("river_tail_weight"):
-		weight = _junction_b.river_tail_weight(self, s)
+		weight = _junction_b.river_tail_weight(self, s_w)
 	if _junction_a != null and _junction_a.has_method("river_head_weight"):
-		weight = minf(weight, _junction_a.river_head_weight(self, s))
+		weight = minf(weight, _junction_a.river_head_weight(self, s_w))
 	return [height, flow, depth, weight]
 
 

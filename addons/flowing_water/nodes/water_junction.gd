@@ -270,8 +270,9 @@ func _update_blend() -> void:
 	else:
 		# reversed: pond style at the start of the river, its own downstream
 		river.set_blend_uniforms(s0, -span, OVERLAP_LIFT, 0.0, 0.0, pond.style)
-	var rm := river.surface_material()
-	if rm != null:
+	# (the far-LOD materials too: seen from afar the river must still sort
+	# over the pond it runs into)
+	for rm: ShaderMaterial in river._all_materials():
 		rm.render_priority = 1
 	var pm := pond.surface_material()
 	if pm != null:
@@ -444,6 +445,15 @@ func _build_extension() -> void:
 	# the mesh was built in world space (end_frame() is global)
 	_extension.top_level = true
 	_extension.global_transform = Transform3D.IDENTITY
+	apply_draw_distance()
+
+
+func apply_draw_distance() -> void:
+	if _extension == null or not is_instance_valid(_extension) or get_tree() == null:
+		return
+	var mgr := get_tree().root.get_node_or_null("WaterManager")
+	if mgr != null:
+		mgr.set_draw_range(_extension)
 
 
 func _manager_call(method: String, arg) -> void:
