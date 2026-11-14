@@ -355,6 +355,13 @@ func snap_to_terrain() -> void:
 # -------------------------------------------------------------------- meshing --
 
 func rebuild_mesh() -> void:
+	# the mesh reads per-cell data (where each column of a fall drops away):
+	# with it streamed out, keep the mesh as it is until it is back
+	for data in baked_segments:
+		if data != null and not data.is_resident():
+			_rebuild_when_loaded = true
+			return
+	_rebuild_when_loaded = false
 	for c in _chunks:
 		if is_instance_valid(c):
 			c.queue_free()
@@ -1409,6 +1416,14 @@ func apply_draw_distance() -> void:
 ## the pond of each junction, which the ribbon runs on into), for the
 ## manager's query grid; empty while there is no mesh (then the river is
 ## always asked).
+var _rebuild_when_loaded := false
+
+## Called by the WaterManager when the flow data was streamed out or back.
+func on_stream_changed(loaded: bool) -> void:
+	if loaded and _rebuild_when_loaded:
+		rebuild_mesh()
+
+
 func get_water_boxes() -> Array:
 	var out := []
 	for c in _chunks:

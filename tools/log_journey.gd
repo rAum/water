@@ -16,6 +16,9 @@ func _ready() -> void:
 func _run(demo: Node) -> void:
 	var mgr := get_tree().root.get_node("WaterManager")
 	var lg: RigidBody3D = demo.get_node("Log1")
+	# the player is disabled: centre the simulation on the log, or it falls
+	# asleep once it drifts away from the player's camera
+	mgr.sim_focus = lg
 	var max_above := 0.0
 	var max_below := 0.0
 	var max_speed := 0.0

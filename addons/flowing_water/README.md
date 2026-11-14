@@ -497,8 +497,38 @@ What the water does to stay cheap from afar, and the one setting to make:
 - **The world water map** follows the camera on its own once the water
   spans more than 8 km (see below).
 
-The baked textures of every body stay in memory while its node is in the
-tree: stream bodies in and out with your own world streaming.
+**Sleep and streaming** are measured from `WaterManager.sim_focus`, your
+player node (left empty, the camera is used):
+
+```gdscript
+WaterManager.sim_focus = $Player
+WaterManager.sim_distance = 150.0    # floaters sleep beyond (default; 0 = never)
+WaterManager.stream_distance = 400.0 # flow data streams beyond (default 0 = off)
+```
+
+- **Floaters sleep** further than `sim_distance` (150 m by default): the
+  body is frozen where it is and no buoyancy, drag or query runs for it.
+  When the focus comes back within range it carries on with the speed it
+  had. A body in the air (going over a fall) sleeps once it lands, and one
+  your game has frozen (held, parked) is left alone. Between 60 m and
+  `sim_distance` the forces are still refreshed at a lower rate.
+  `WaterFloater.set_sim_asleep()` parks one by hand, and its
+  `sim_sleep_changed` signal tells you when it goes or wakes.
+- **Flow data streams**: with `stream_distance` set, a body further than
+  that releases its per-cell flow arrays, the bulk of its memory and only
+  read by CPU queries. The surface keeps drawing: its mesh, textures and
+  per-row data stay. When the focus comes back within range the arrays are
+  read back from the bake's file in the background (about a third of a
+  second for the whole demo) and `stream_changed(body, loaded)` fires.
+  While a body's data is out, queries over a river find no water and a
+  pond answers with its level and still water. Floaters never wake over
+  water that is out (`is_loaded_at()`), so nothing sinks. Keep
+  `stream_distance` above `sim_distance`. Only bakes saved to their own
+  `.res` files (the default) stream; data shared by duplicated bodies is
+  released only when all of them are far.
+
+The meshes and textures of every body stay in memory while its node is in
+the tree: load and unload whole bodies with your own world streaming.
 
 **Renderers**: Forward+ and Mobile are fully supported. Compatibility runs
 with these fallbacks: player ripples **off** (one warning — it has no
