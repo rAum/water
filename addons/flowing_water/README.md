@@ -2,8 +2,8 @@
 
 Rivers, streams, waterfalls and ponds for Godot 4.7. Draw a river down a
 slope, press **Bake**, and get water that flows correctly around rocks,
-reacts to the player, carries floating objects, and runs well on a Steam
-Deck. Pure GDScript and shaders — no GDExtension, nothing to compile.
+reacts to the player, and carries floating objects. It has a Steam Deck
+quality preset (not yet measured on a Deck). Pure GDScript and shaders — no GDExtension, nothing to compile.
 
 The flow is **baked once** from the river bed and the obstacles (the same
 pipeline as the mountain-stream prototype: depth → Manning speed → constant
@@ -302,9 +302,10 @@ WaterManager.storm_turbidity = 0.6  # and the runoff muddies the rivers
 
 Measured with `tools/rain_bench.tscn` on an M4 Pro at 2560x1600, with the
 pond filling the view on High: ripples +0.8 ms (21.0 -> 21.9 ms), ripples
-plus falling rain +1.4 ms. Back at 0 the frame returns to the baseline. On
-Deck the difference was below the noise of the measurement. (Metal has no
-GPU timestamps, so these are whole-frame times.)
+plus falling rain +1.4 ms. Back at 0 the frame returns to the baseline.
+With the Deck preset on the same Mac the difference was below the noise of
+the measurement. (Metal has no GPU timestamps, so these are whole-frame
+times.) Not yet measured on a Steam Deck.
 
 ### Caustics
 
@@ -521,7 +522,9 @@ What the water does to stay cheap from afar, and the one setting to make:
   (every 2nd, 4th, 8th, 16th row and column) for Godot's automatic mesh
   LOD. Rows that a straight interpolation would spoil (falling sheets,
   their foot, junction fades, plunge churn) stay in every level, and each
-  level declares its real geometric error, so cracks stay below a pixel.
+  level declares its real geometric error, so Godot switches levels before
+  the error is visible. (Checked on the examples with the LODs forced
+  coarse: no cracks showed.)
   The levels start around 160 m on a 1080p screen (well past the vertex
   waves) and double per level. `rendering/mesh_lod/lod_change/threshold_pixels`
   and `GeometryInstance3D.lod_bias` tune them as for any mesh.
@@ -531,7 +534,7 @@ What the water does to stay cheap from afar, and the one setting to make:
 - **Queries** (`WaterManager.query()` and the `get_*` wrappers, floaters,
   interactors, underwater) look bodies up in a 32 m grid of their chunk
   boxes instead of asking every body: with 100 rivers in the scene a query
-  costs about 1 µs instead of 350 µs. Bodies moved at runtime are
+  costs about 1 µs instead of 350 µs (measured on an M4 Pro). Bodies moved at runtime are
   re-indexed within half a second.
 - **The near/far shader check** reruns only after the camera moves 2 m.
 - **Wet bank decals** fade out from 90 m.
@@ -559,8 +562,8 @@ WaterManager.stream_distance = 400.0 # flow data streams beyond (default 0 = off
   that releases its per-cell flow arrays, the bulk of its memory and only
   read by CPU queries. The surface keeps drawing: its mesh, textures and
   per-row data stay. When the focus comes back within range the arrays are
-  read back from the bake's file in the background (about a third of a
-  second for the whole demo) and `stream_changed(body, loaded)` fires.
+  read back from the bake's file in the background (about 0.3 s for the
+  whole demo on an M4 Pro) and `stream_changed(body, loaded)` fires.
   While a body's data is out, queries over a river find no water and a
   pond answers with its level and still water. Floaters never wake over
   water that is out (`is_loaded_at()`), so nothing sinks. Keep
@@ -571,8 +574,9 @@ WaterManager.stream_distance = 400.0 # flow data streams beyond (default 0 = off
 The meshes and textures of every body stay in memory while its node is in
 the tree: load and unload whole bodies with your own world streaming.
 
-**Renderers**: Forward+ and Mobile are fully supported. Compatibility runs
-with these fallbacks: player ripples **off** (one warning — it has no
+**Renderers**: developed and tested with Forward+ on macOS (Metal). The
+Mobile renderer uses the same shaders and Compatibility has these
+fallbacks, but neither has been tested yet: player ripples **off** (one warning — it has no
 compute shaders; see "Changes from the plan"), bake pressure solve on the
 CPU, underwater as environment fog, thickness from the baked depth.
 
@@ -580,7 +584,8 @@ CPU, underwater as environment fog, thickness from the baked depth.
 It flies a fixed path through the demo at all four presets, twice each
 (water shown/hidden), and reports average/worst frame time, GPU time and
 the water-only GPU cost to the console and `user://water_benchmark.txt`.
-Budgets: Deck ≤ 2.5 ms at 1280×800, Medium ≤ 2.5 ms at 1080p mid-range.
+Targets (not yet checked on that hardware): Deck ≤ 2.5 ms at 1280×800,
+Medium ≤ 2.5 ms at 1080p on a mid-range GPU.
 
 Measured on the development machine (Apple M4 Pro, 1280x800, Forward+,
 vsync off, flying the demo's `BenchPath`; Metal does not expose GPU
@@ -594,8 +599,8 @@ Medium: frame avg 3.36 ms, worst 20.0 ms, water frame delta ~0.64 ms
 High:   frame avg 3.33 ms, worst 12.2 ms, water frame delta ~0.58 ms
 ```
 
-On this GPU the water costs about half a millisecond. **I have no Steam Deck here**:
-run `benchmark.tscn` on yours (Vulkan reports real GPU timings) and send
+On this GPU the water costs about half a millisecond. **Not yet measured on
+a Steam Deck**: run `benchmark.tscn` on one (Vulkan reports real GPU timings) and check
 the log; if the Deck preset misses 2.5 ms, the next things to cut are the
 ripple grid (128² → 96²), the spray amount, and the detail tile count
 (raise `foam_tile_size`).
@@ -661,8 +666,8 @@ scale with it. If absent, nothing breaks and nothing is logged.
    the cheap variant with hysteresis only past the distance where they
    have already faded out, so the switch is invisible.
 6. **Underwater effect** uses a uniform buffer instead of push constants
-   (the parameter block exceeds the 128-byte push-constant floor — the
-   Steam Deck's limit). It runs on every preset (Deck/Low leave out the
+   (the parameter block exceeds 128 bytes, the push-constant size Vulkan
+   guarantees on every GPU). It runs on every preset (Deck/Low leave out the
    shafts, particles and lens); only the Compatibility renderer falls back
    to environment fog.
 7. **`EditorInterface`** is accessed through `Engine.get_singleton()` in
