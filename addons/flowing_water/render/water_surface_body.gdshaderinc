@@ -11,6 +11,7 @@
 //   REFRACTION_SIMPLE      screen-UV offset, no depth check
 //   USE_DEPTH_BUFFER       water thickness from the depth buffer
 //   STYLIZED               banded colour, hard foam, shoreline lines
+//   FOAM_BUBBLES           realistic foam breaks up bubble by bubble (foam_tex)
 //   VERTEX_WAVES           standing waves + ripples displace vertices
 //   SSR                    screen-space reflections of banks, rocks, trees
 //
@@ -307,13 +308,16 @@ void fragment() {
 	if (lake) {
 		flow_m += wind_dir * 0.06 * still;
 	}
+	// still water: foam drifts and lingers instead of churning - the lace
+	// re-forms slowly (one slow cycle for the whole body, so no shear)
+	float per = lake ? 4.0 : 1.0;
 #if DETAIL_LAYERS >= 2
-	vec4 d1 = flow_phases(uvm, flow_m, 0.5 * tile, 1.2, jit, TIME);
-	vec4 d2 = flow_phases(uvm, flow_m, 2.3 * tile, 0.45, jit + 0.5, TIME);
+	vec4 d1 = flow_phases(uvm, flow_m, 0.5 * tile, 1.2 * per, jit, TIME);
+	vec4 d2 = flow_phases(uvm, flow_m, 2.3 * tile, 0.45 * per, jit + 0.5, TIME);
 	float pattern = d1.a * 0.62 + d2.a * 0.38;
 	vec2 detail_slope = (d1.rg - 0.5) * 0.7 + (d2.rg - 0.5) * 0.5;
 #else
-	vec4 d1 = flow_phases(uvm, flow_m, 0.9 * tile, 0.8, jit, TIME);
+	vec4 d1 = flow_phases(uvm, flow_m, 0.9 * tile, 0.8 * per, jit, TIME);
 	float pattern = d1.a;
 	vec2 detail_slope = (d1.rg - 0.5) * 1.0;
 #endif
@@ -323,7 +327,7 @@ void fragment() {
 	float near_w = 1.0 - smoothstep(6.0, 14.0, length(v_world - (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz));
 	float fine = 0.5;
 	if (near_w > 0.01 && mask > 0.1) {
-		vec4 d3 = flow_phases(uvm, flow_m, 4.7 * tile, 0.3, jit + 0.25, TIME);
+		vec4 d3 = flow_phases(uvm, flow_m, 4.7 * tile, 0.3 * per, jit + 0.25, TIME);
 		// blending three phases flattens contrast: restore it
 		fine = mix(0.5, clamp((d3.a - 0.4) * 3.2 + 0.5, 0.0, 1.0), near_w);
 		pattern = mix(pattern, pattern * 0.72 + d3.a * 0.28, near_w);
@@ -331,6 +335,42 @@ void fragment() {
 	}
 #else
 	float fine = 0.5;
+#endif
+	// --- bubbles: up close, foam is a raft of bubbles, not a smooth blob ------
+	// The bubble texture's survival is added to the lace before it is
+	// thresholded, so a patch thins and breaks up bubble by bubble and a
+	// dense mat keeps darker pores between them. Its mipmaps average it out
+	// with distance, and past ~20 m it is not read at all.
+	float foam_soft = s_foam_soft;
+	float bub_w = 0.0;
+#if defined(FOAM_BUBBLES) && !defined(STYLIZED)
+	const float BUB_AMT = 0.7;
+	// the bubbles carve into the lace and the crisp edge loses the faint
+	// film of partial foam a soft threshold leaves around a patch: it takes
+	// more coverage to keep the same amount of white on the water
+#define BUB_COVER(cv) min((cv) * 1.45, 1.0)
+	FoamBubbles fbub;
+	bub_w = 1.0 - smoothstep(10.0, 22.0, length(v_world - (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz));
+	// three more reads: only where foam can show (white water, the plunge,
+	// a pond's shore and drifting inflow foam, a river running into still water)
+	bool can_foam = mask > 0.03 || v_plunge > 0.001
+		|| (lake && (baked_depth < 0.3 || speed > 0.03))
+		|| (fade_out_len_m > 0.001 && v_metric.y > fade_out_start_m - 7.0);
+	bub_w *= float(can_foam);
+	// fast water: the foam is torn into streaks and blurred by its own
+	// speed, single bubbles do not read - leave it to the streaky lace
+	bub_w *= 1.0 - smoothstep(1.2, 3.0, speed);
+	if (bub_w > 0.01) {
+		// on still water foam lives long and drifts slowly: a slow cycle
+		// (one period for the whole body, so phases never shear apart)
+		float bub_period = lake ? 4.0 : 0.9;
+		fbub = foam_bubbles(v_metric, flow_m / st, 1.0 / (0.8 * max(s_foam_tile, 0.25)), bub_period, jit + 0.15, TIME);
+		// the bubbles draw the edge now: keep it crisp
+		foam_soft = mix(s_foam_soft, 0.04, bub_w);
+	}
+#define FOAM_COVER(base, cv) (bub_w > 0.01 ? mix(smoothstep(1.0 - (cv) - s_foam_soft, 1.0 - (cv) + s_foam_soft, base), foam_bubbles_cover(fbub, base, BUB_COVER(cv), foam_soft, BUB_AMT), bub_w) : smoothstep(1.0 - (cv) - s_foam_soft, 1.0 - (cv) + s_foam_soft, base))
+#else
+#define FOAM_COVER(base, cv) smoothstep(1.0 - (cv) - s_foam_soft, 1.0 - (cv) + s_foam_soft, base)
 #endif
 
 	// --- white water: the baked mask is a threshold on the moving lace -------
@@ -360,8 +400,7 @@ void fragment() {
 		cover = max(cover, clamp(v_plunge * (0.75 + 0.6 * boil_n), 0.0, 1.0));
 		aer = max(aer, v_plunge);
 	}
-	float foam = smoothstep(1.0 - cover - s_foam_soft, 1.0 - cover + s_foam_soft, pattern)
-		* step(0.001, cover);
+	float foam = FOAM_COVER(pattern, cover) * step(0.001, cover);
 	// no painted line along the banks: foam needs a little water under it
 	foam *= smoothstep(0.03, 0.14, baked_depth);
 	// --- still water: foam lapping at the shore, foam carried in by a river ---
@@ -384,7 +423,7 @@ void fragment() {
 		// so restore contrast (and the fine bubble grain where there is one)
 		float lace = clamp((pattern - 0.5) * 2.4 + 0.5, 0.0, 1.0);
 		lace = mix(lace, fine, 0.3);
-		float lake_foam = smoothstep(1.0 - lake_cover - s_foam_soft, 1.0 - lake_cover + s_foam_soft, lace)
+		float lake_foam = FOAM_COVER(lace, lake_cover)
 			* step(0.001, lake_cover) * smoothstep(0.004, 0.03, baked_depth);
 		foam = max(foam, lake_foam);
 		cover = max(cover, lake_cover * 0.8);
@@ -396,7 +435,7 @@ void fragment() {
 		float rafts = smoothstep(0.35, 0.72, d1.b);
 		float in_cover = into * rafts * s_inflow_foam * 0.75;
 		float lace = clamp((pattern - 0.5) * 2.0 + 0.5, 0.0, 1.0);
-		float in_foam = smoothstep(1.0 - in_cover - s_foam_soft, 1.0 - in_cover + s_foam_soft, lace)
+		float in_foam = FOAM_COVER(lace, in_cover)
 			* step(0.001, in_cover) * smoothstep(0.03, 0.14, baked_depth);
 		foam = max(foam, in_foam);
 		cover = max(cover, in_cover * 0.8);
@@ -410,6 +449,32 @@ void fragment() {
 	}
 #endif
 
+	// the look of the bubbles that are actually showing: each phase weighted by
+	// its fade and how much of its foam survives the threshold here
+	vec4 bub = vec4(0.5, 0.88, 0.5, 0.5);
+	// Thickness: how far the foam stands above its threshold. A patch is a
+	// thin, see-through veil at its edges (and on light lace) and a thick
+	// white mass only in its core - foam has volume, it is not a decal.
+	float foam_thick = smoothstep(0.0, 0.16, pattern - (1.0 - cover)) * 0.8 + cover * 0.2;
+#if defined(FOAM_BUBBLES) && !defined(STYLIZED)
+	if (bub_w > 0.01) {
+		vec4 acc = vec4(0.0);
+		float wsum = 0.0;
+		float th = 0.0;
+		for (int k = 0; k < 3; k++) {
+			float lift = foam_bubble_lift(fbub, k, pattern, BUB_COVER(cover), BUB_AMT);
+			th = max(th, smoothstep(0.0, 0.16, lift));
+			float vis = fbub.life[k] * (0.05 + smoothstep(-foam_soft, foam_soft, lift));
+			// lean on the strongest phase: an even mix of three greys out a
+			// dense mat (a short cross-fade when the lead changes is fine)
+			vis *= vis * vis;
+			acc += fbub.s[k] * vis;
+			wsum += vis;
+		}
+		bub = acc / max(wsum, 1e-4);
+		foam_thick = mix(foam_thick, th * 0.8 + cover * 0.2, bub_w);
+	}
+#endif
 	// --- surface normal: add slopes, then build the normal in the river frame -
 	float rough_amp = clamp(mix(s_detail_rest, s_detail_speed, clamp(speed / 3.0, 0.0, 1.0))
 		+ mask * 0.5, 0.0, 1.6) * (1.0 - fall * 0.6) * mix(1.0, 0.35, tongue);
@@ -444,7 +509,7 @@ void fragment() {
 	sl += rip.yz * 2.0;
 	// foam is a mat of bubbles: it loses the mirror-smooth wavelets but
 	// keeps a lumpy surface of its own
-	sl = mix(sl, detail_slope * 0.9, foam * 0.7);
+	sl = mix(sl, detail_slope * 0.9 + (bub.ba - 0.5) * 1.0 * bub_w, foam * 0.7);
 
 	vec3 n_world = normalize(v_norm0 - v_side * sl.x - v_tan * sl.y);
 	vec3 cam_pos = (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
@@ -784,7 +849,14 @@ void fragment() {
 		// thin foam is a film of bubbles you can see through; only dense
 		// foam is opaque. The fine layer gives it grain up close.
 		float grain = smoothstep(0.15, 0.85, clamp((pattern - 0.4) * 1.8 + 0.5, 0.0, 1.0) * 0.45 + fine * 0.55);
+		// up close the grain is the bubbles themselves: bright walls, the
+		// darker film of the big ones
+		grain = mix(grain, smoothstep(0.5, 1.0, bub.g), bub_w * 0.6);
 		float foam_a = foam * mix(0.55, 0.96, smoothstep(0.15, 0.7, cover)) * mix(0.72, 1.0, grain) * v_fade;
+#ifndef STYLIZED
+		// a thin veil of bubbles lets the water show through it
+		foam_a *= mix(0.62, 1.0, foam_thick);
+#endif
 		// white water is not paint: bubbles shade each other (neutral grey
 		// grain), and thin lace is coloured by the water seen through it
 		// while a dense mat is nearly the white of the bubbles
@@ -794,8 +866,16 @@ void fragment() {
 		float tint_k = s_foam_tint;
 #endif
 		float thin_foam = 1.0 - smoothstep(0.15, 0.8, cover);
+#ifndef STYLIZED
+		thin_foam = max(thin_foam, 1.0 - foam_thick);
+#endif
 		vec3 foam_body = mix(vec3(1.0), water_hue, tint_k * mix(0.3, 0.85, thin_foam) * mix(1.0, 0.6, grain));
 		vec3 foam_col = s_foam_color * foam_body * mix(0.6, 0.88, grain);
+#ifndef STYLIZED
+		// volume: the light reaches the crest of a thick mass; a thin veil
+		// and the hollows in a mat are lit through water, greyer and cooler
+		foam_col *= mix(0.74, 1.04, foam_thick);
+#endif
 		// on a fall the white water is the aerated sheet, not surface foam:
 		// dense curtains are bright, thin water between them greyer and more
 		// the colour of the water, and the lower surface sits in the shade
@@ -803,6 +883,9 @@ void fragment() {
 		float sheet_d = smoothstep(0.3, 0.92, fall_dens);
 		vec3 sheet_col = s_foam_color * mix(vec3(1.0), water_hue, tint_k * mix(0.75, 0.25, sheet_d)) * mix(0.52, 0.88, sheet_d);
 		sheet_col *= mix(1.0, 0.8, lower);
+#if defined(FOAM_BUBBLES) && !defined(STYLIZED)
+		foam_col *= mix(1.0, clamp((bub.g - 0.86) * 1.8 + 0.94, 0.45, 1.06), bub_w);
+#endif
 		foam_col = mix(foam_col, sheet_col, fall_amt);
 		foam_a = mix(foam_a, fall_white * 0.97, fall_amt);
 		albedo = mix(albedo, foam_col, foam_a);
@@ -814,8 +897,9 @@ void fragment() {
 		}
 		// a bubble mat scatters, it does not mirror: little sky in it (a
 		// glossy foam picks up the blue of the sky and reads as a cold film)
-		rough = mix(rough, 0.95, foam_a);
-		spec = mix(spec, 0.06, foam_a);
+		// (up close the bubble domes still catch small glints of the sun)
+		rough = mix(rough, mix(0.95, 0.7, bub_w), foam_a);
+		spec = mix(spec, mix(0.06, 0.12, bub_w), foam_a);
 		// aerated water scatters light through itself: matte, lit softly from
 		// both sides, no mirror in it
 		float fall_a = fall_amt * foam_a;

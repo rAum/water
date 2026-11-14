@@ -267,3 +267,151 @@ static func generate_puff(n: int = 128) -> ImageTexture:
 			img.set_pixel(x, y, Color(1, 1, 1, a * a))
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
+
+
+## The close-range foam texture: a tileable raft of bubbles (realistic
+## styles only). River foam seen from a few metres is not a smooth white
+## blob: it is bubbles of very different sizes packed into a mat, with
+## bright walls where they press together, the darker water showing
+## through the film of the big ones, and patch edges that break up bubble
+## by bubble rather than fading.
+##   r = survival: the threshold each bubble disappears at (whole bubbles,
+##       slightly lower at their rims, so a patch thins bubble by bubble;
+##       the gaps between bubbles are fine micro-foam that fills in last).
+##       Mean 0.5, so the shader adds (r - 0.5) to its own coverage field
+##       and the mipmaps fade it out with distance by themselves.
+##   g = shade: bright walls, darker centres of large bubbles.
+##   b, a = surface slopes of the bubble domes (0.5 = flat).
+static func generate_foam(n: int = 512) -> ImageTexture:
+	var fn := float(n)
+	# clustering: bubbles in the same clump survive together
+	var clus := PackedFloat32Array()
+	clus.resize(n * n)
+	for y in n:
+		for x in n:
+			var u := float(x) / fn
+			var v := float(y) / fn
+			var c := _tile(u * 3.0, v * 3.0, 3, 901) * 0.45 + _tile(u * 7.0, v * 7.0, 7, 902) * 0.3 \
+				+ _tile(u * 16.0, v * 16.0, 16, 903) * 0.25
+			var lace := 1.0 - smoothstep(0.0, 0.35, _worley_border(u + (c - 0.5) * 0.1, v, 6, 904))
+			clus[y * n + x] = clampf((c - 0.5) * 1.6 + 0.5 + lace * 0.25 - 0.1, 0.0, 1.0)
+
+	var top := PackedFloat32Array()     # survival of the bubble seen at each pixel
+	top.resize(n * n)
+	top.fill(-1.0)
+	var win := PackedInt32Array()       # which bubble is seen at each pixel
+	win.resize(n * n)
+	win.fill(-1)
+	var dd := PackedFloat32Array()      # distance from that bubble's centre / r
+	dd.resize(n * n)
+	var b_r := PackedFloat32Array()
+	var b_s := PackedFloat32Array()
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4421
+	var area := 0.0
+	var budget := fn * fn * 2.6
+	var rmin := 1.3
+	var rmax := 8.0
+	while area < budget:
+		var cx := rng.randf() * fn
+		var cy := rng.randf() * fn
+		# many small bubbles, few big ones
+		var r := rmin * pow(rmax / rmin, pow(rng.randf(), 2.3))
+		var ci := (int(cy) % n) * n + int(cx) % n
+		var s := clampf(clus[ci] * 0.8 + rng.randf() * 0.32 - 0.08, 0.0, 1.0)
+		# big bubbles burst first: they survive only in the thick of a clump
+		s -= smoothstep(4.0, 8.0, r) * 0.1
+		var id := b_r.size()
+		b_r.append(r)
+		b_s.append(s)
+		area += PI * r * r
+		var x0 := int(floor(cx - r))
+		var x1 := int(ceil(cx + r))
+		var y0 := int(floor(cy - r))
+		var y1 := int(ceil(cy + r))
+		for yy in range(y0, y1 + 1):
+			var dy := (float(yy) + 0.5 - cy) / r
+			if absf(dy) >= 1.0:
+				continue
+			var wy := ((yy % n) + n) % n
+			for xx in range(x0, x1 + 1):
+				var dx := (float(xx) + 0.5 - cx) / r
+				var d2 := dx * dx + dy * dy
+				if d2 >= 1.0:
+					continue
+				# a pixel is foam while ANY bubble over it survives, so a
+				# thinning patch is a union of whole round bubbles (never
+				# shards of half-hidden ones): the pixel shows the bubble that
+				# lasts longest there
+				var sv := s - 0.12 * d2 * d2 * d2
+				var k := wy * n + ((xx % n) + n) % n
+				if sv > top[k]:
+					top[k] = sv
+					win[k] = id
+					dd[k] = sqrt(d2)
+
+	var surv := PackedFloat32Array()
+	surv.resize(n * n)
+	var shade := PackedFloat32Array()
+	shade.resize(n * n)
+	var sum := 0.0
+	for y in n:
+		for x in n:
+			var k := y * n + x
+			var w := win[k]
+			if w < 0:
+				# micro-foam between the bubbles: closes up only in dense mats
+				var u := float(x) / fn
+				var v := float(y) / fn
+				surv[k] = clus[k] * 0.4 + _tile(u * 64.0, v * 64.0, 64, 905) * 0.12
+				shade[k] = 0.78
+				top[k] = 0.0
+				continue
+			var r := b_r[w]
+			var d := dd[k]
+			surv[k] = top[k]
+			# dome height, for the slopes
+			top[k] = r * (0.55 * sqrt(maxf(1.0 - d * d, 0.0)) + 0.45)
+			# the film of a big bubble shows the water behind it; small ones
+			# are as white as the mat
+			var dark := lerpf(0.05, 0.28, smoothstep(2.5, 8.0, r))
+			shade[k] = 1.0 - dark * (1.0 - smoothstep(0.45, 0.95, d))
+	# walls: where two bubbles meet, the liquid gathers and scatters bright
+	var wall := PackedFloat32Array()
+	wall.resize(n * n)
+	for y in n:
+		for x in n:
+			var k := y * n + x
+			var w := win[k]
+			var e := 0.0
+			for o: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var k2 := ((y + o.y + n) % n) * n + (x + o.x + n) % n
+				if win[k2] != w:
+					e = 1.0
+			wall[k] = e
+	for y in n:
+		for x in n:
+			var k := y * n + x
+			var e := wall[k] * 0.6
+			for o: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				e += wall[((y + o.y + n) % n) * n + (x + o.x + n) % n] * 0.1
+			if win[k] >= 0:
+				shade[k] = maxf(shade[k], lerpf(shade[k], 1.0, e * 1.6))
+			sum += surv[k]
+	var shift := 0.5 - sum / (fn * fn)
+
+	var out := PackedByteArray()
+	out.resize(n * n * 4)
+	for y in n:
+		for x in n:
+			var k := y * n + x
+			var sx := top[y * n + (x + 1) % n] - top[y * n + (x + n - 1) % n]
+			var sy := top[((y + 1) % n) * n + x] - top[((y + n - 1) % n) * n + x]
+			out[k * 4] = int(clampf((surv[k] + shift) * 255.0, 0.0, 255.0))
+			out[k * 4 + 1] = int(clampf(shade[k] * 255.0, 0.0, 255.0))
+			out[k * 4 + 2] = int(clampf((sx * 0.12 + 0.5) * 255.0, 0.0, 255.0))
+			out[k * 4 + 3] = int(clampf((sy * 0.12 + 0.5) * 255.0, 0.0, 255.0))
+	var img := Image.create_from_data(n, n, false, Image.FORMAT_RGBA8, out)
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)

@@ -1244,6 +1244,7 @@ func _apply_style() -> void:
 		if _manager() != null:
 			m.set_shader_parameter("noise_tex", _manager().noise_texture)
 			m.set_shader_parameter("fall_tex", _manager().fall_texture)
+			m.set_shader_parameter("foam_tex", _manager().foam_texture)
 	# a junction owns the second style and the blend uniforms: restore them
 	for j in [_junction_a, _junction_b]:
 		if j != null and is_instance_valid(j) and j.has_method("_update_blend"):

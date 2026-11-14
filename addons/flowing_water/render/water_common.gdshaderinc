@@ -17,6 +17,10 @@ uniform sampler2D noise_tex : filter_linear_mipmap_anisotropic, repeat_enable;
 // a = fibres. Long along the fall, narrow across it.
 uniform sampler2D fall_tex : filter_linear_mipmap_anisotropic, repeat_enable, hint_default_white;
 
+// Close-range foam (realistic styles, FOAM_BUBBLES): a tileable raft of
+// bubbles. r = survival threshold (mean 0.5), g = shade, ba = dome slopes.
+uniform sampler2D foam_tex : filter_linear_mipmap_anisotropic, repeat_enable;
+
 // Debug view: 0 final, 1 flow speed, 2 foam mask, 3 depth.
 uniform int debug_view = 0;
 
@@ -165,6 +169,50 @@ vec4 flow_phases(vec2 uvm, vec2 flow, float scale, float period, float jit, floa
 	}
 	return acc / 1.5;
 }
+
+#ifdef FOAM_BUBBLES
+// The bubble texture rides the current like the other detail layers, but
+// its three phases are not cross-faded: each is thresholded on its own and
+// as a phase ages its bubbles pop one by one (the threshold rises with its
+// age, so the weakest go first) until it is gone before it jumps back.
+// A patch never fades like a dissolving decal - on still water that reads
+// badly - it thins out bubble by bubble, the way real foam does.
+struct FoamBubbles {
+	vec4 s[3];
+	float life[3];   // 0 at birth/death, 1 in the middle of a phase
+};
+FoamBubbles foam_bubbles(vec2 uvm, vec2 flow, float scale, float period, float jit, float t) {
+	FoamBubbles fb;
+	for (int k = 0; k < 3; k++) {
+		float fk = float(k);
+		float ph = fract(t / period + fk / 3.0 + jit);
+		vec2 off = flow * (ph - 0.5) * period;
+		float w = sin(WPI * ph);
+		fb.life[k] = w * w;
+		fb.s[k] = texture(foam_tex, (uvm - off) * scale + vec2(0.53, 0.29) * fk);
+	}
+	return fb;
+}
+// The bubbles mostly carve into the lace (BUB_MID above the texture's mean
+// of 0.5): they break up the edges and open pores in a patch, but never
+// sprinkle stray specks over water the lace leaves clear.
+const float BUB_MID = 0.72;
+// how far an ageing phase's threshold rises: enough to pop every bubble by
+// the end of the phase, yet barely touching the phase in its prime
+const float BUB_POP = 1.4;
+// how far bubble k stands above the threshold (> 0: foam)
+float foam_bubble_lift(FoamBubbles fb, int k, float base, float cover, float amt) {
+	return base + (fb.s[k].r - BUB_MID) * amt - (1.0 - cover) - (1.0 - fb.life[k]) * (1.0 - fb.life[k]) * BUB_POP;
+}
+// coverage of foam whose lace value is `base`: the union of the phases
+float foam_bubbles_cover(FoamBubbles fb, float base, float cover, float soft, float amt) {
+	float f = 0.0;
+	for (int k = 0; k < 3; k++) {
+		f = max(f, smoothstep(-soft, soft, foam_bubble_lift(fb, k, base, cover, amt)));
+	}
+	return f;
+}
+#endif
 
 // Wind-driven wavelets on still water. Returns vec3(height, d/dx, d/dz) in
 // world metres for a world (x, z) position. Short gravity waves travel at
