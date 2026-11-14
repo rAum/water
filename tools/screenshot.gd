@@ -4,13 +4,15 @@
 extends Node3D
 ## Look-dev capture tool. Loads a scene, waits for bakes, renders shots.
 ## Run: godot --path . res://tools/screenshot.tscn -- scene=res://... \
-##        shot=name:px,py,pz:lx,ly,lz [shot=...] [wait=3] [debug=N] [style=name] [player=x,y,z] [hide=NodePath] [lod_threshold=px]
+##        shot=name:px,py,pz:lx,ly,lz [shot=...] [wait=3] [debug=N] [style=name] [player=x,y,z] [hide=NodePath] [lod_threshold=px] [rain=0..1] [rain_ripples=0..1]
 
 var scene: Node
 var cam: Camera3D
 var _ripples: Array[Vector3] = []
 var _quality := -1
 var _storm := -1.0
+var _rain := -1.0
+var _ripples_rain := -1.0
 var _t := 0.0
 var _hide: Array[String] = []
 
@@ -54,6 +56,11 @@ func _ready() -> void:
 			_hide.append(a.substr(5))
 		elif a.begins_with("storm="):
 			_storm = float(a.substr(6))
+		elif a.begins_with("rain="):
+			# falling rain and the drops on the water together
+			_rain = float(a.substr(5))
+		elif a.begins_with("rain_ripples="):
+			_ripples_rain = float(a.substr(13))
 		elif a.begins_with("lod_threshold="):
 			# mesh LOD switch threshold in pixels (Godot's default is 1):
 			# large values force the coarse distance LODs up close
@@ -106,6 +113,11 @@ func _run(shots: Array, wait: float, debug: int, style: String) -> void:
 		get_tree().root.get_node("WaterManager").quality = _quality
 	if _storm >= 0.0:
 		get_tree().root.get_node("WaterManager").storm_turbidity = _storm
+	if _rain >= 0.0:
+		get_tree().root.get_node("WaterManager").rain_intensity = _rain
+		get_tree().root.get_node("WaterManager").rain_ripples = _rain
+	if _ripples_rain >= 0.0:
+		get_tree().root.get_node("WaterManager").rain_ripples = _ripples_rain
 	if style != "":
 		var st: WaterStyle = load("res://addons/flowing_water/styles/%s.tres" % style)
 		for b in bodies:

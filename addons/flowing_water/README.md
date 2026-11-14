@@ -46,8 +46,9 @@ notes; hold the right mouse button to look, WASD/QE to fly):
 | `examples/demo/demo.tscn` | Everything together: stream -> rapids -> waterfall -> pond -> outlet, walkable |
 
 Keys in every scene: **1-4** debug views (final / flow speed / foam mask /
-depth), **5** cycle styles, **Q** cycle quality presets, **R** toggle storm
-turbidity (rain), **L** drop a log where the scene has a `LogSpawn` marker.
+depth), **5** cycle styles, **Q** cycle quality presets, **R** rain (off /
+shower / downpour, with muddy runoff), **T** raindrop ripples on the water
+alone, **L** drop a log where the scene has a `LogSpawn` marker.
 
 Every scene is centred on the world origin (the water in the middle of the
 scene is at y = 0) and built in metres: the player is 1.75 m tall, streams
@@ -268,6 +269,43 @@ added to every style, and `WaterManager.storm_color` is the mud it washes
 in. Tween it up after rain and every river in the level turns brown
 together - no re-bake, no material swaps. (Key **R** in the examples.)
 
+### Rain
+
+Two independent settings, both 0 (off) by default and 0-1 up to a downpour:
+
+- `WaterManager.rain_ripples`: drops landing on every water surface near
+  the camera. Each drop rings outward and fades, with a brief white crown
+  where it hits. Drops differ in size and strength, land at random places
+  and moments, and come down in drifting patches, so the rain never covers
+  the water evenly. On a river the rings ride the current. In white water
+  and on falls they are lost in the churn and are left out. A finer chop and
+  a slightly rougher, darker surface take over with distance. The rings are
+  procedural (no texture, no simulation). Cost: a few instructions per water
+  pixel and two noise reads. High and Medium use three drop layers, Deck
+  and stylized two, Low one, and the far LOD only the chop. At 0 all of it
+  is skipped by one branch on a shader global.
+- `WaterManager.rain_intensity`: streaks of falling rain around the camera,
+  from one `GPUParticles3D` (`render/water_rain.gd`) that follows the
+  camera and slants with `get_wind()`. The drops are a few millimetres
+  wide, never big transparent sprites, and fade near the camera and at the
+  edge of their 26 m box. The drop count at full intensity comes from the
+  preset (Deck 1400, Low 1000, Medium 2600, High 4000) and scales with the
+  intensity without restarting the emitter. They are hidden under water and
+  in the editor. At 0 the emitter is freed. `rain_color` sets their colour
+  and opacity.
+
+```gdscript
+WaterManager.rain_intensity = 1.0   # falling rain
+WaterManager.rain_ripples = 1.0     # drops on the water
+WaterManager.storm_turbidity = 0.6  # and the runoff muddies the rivers
+```
+
+Measured with `tools/rain_bench.tscn` on an M4 Pro at 2560x1600, with the
+pond filling the view on High: ripples +0.8 ms (21.0 -> 21.9 ms), ripples
+plus falling rain +1.4 ms. Back at 0 the frame returns to the baseline. On
+Deck the difference was below the noise of the measurement. (Metal has no
+GPU timestamps, so these are whole-frame times.)
+
 ### Caustics
 
 Caustics are drawn **by the water surface itself**: it reconstructs the
@@ -333,6 +371,8 @@ WaterManager.get_depth(pos)
 WaterManager.get_body(pos)
 WaterManager.add_ripple(pos, strength, radius)
 WaterManager.storm_turbidity = 0.6   # rain: every river turns muddy
+WaterManager.rain_intensity = 1.0    # falling rain around the camera
+WaterManager.rain_ripples = 1.0      # raindrops ringing the water
 WaterManager.storm_color = Color(0.33, 0.24, 0.13)
 ```
 
@@ -445,6 +485,7 @@ override.
 | World water map | 128² | 128² | 256² | 256² |
 | Caustics (from the surface) | 1 sample | off | 2 samples | 2 samples |
 | Spray amount | 35 % | 20 % | 70 % | 100 % |
+| Rain: drop layers / falling drops | 2 / 1400 | 1 / 1000 | 3 / 2600 | 3 / 4000 |
 | Underwater | fog, 1-sample caustics, waterline | same as Deck | + shafts (6 steps), 2 particle shells, lens, bed mirror | + shafts (12 steps), 4 particle shells |
 
 Quality levels are **compiled shader variants** (`render/water_*.gdshader`

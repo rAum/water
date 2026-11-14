@@ -79,3 +79,7 @@ flowing_water_storm_color={
 "type": "vec3",
 "value": Vector3(0.33, 0.24, 0.13)
 }
+flowing_water_rain={
+"type": "float",
+"value": 0.0
+}

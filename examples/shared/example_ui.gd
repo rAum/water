@@ -5,7 +5,9 @@ extends CanvasLayer
 ## On-screen help and hotkeys shared by the example scenes.
 ##   1-4  debug views (final / flow speed / foam mask / depth)
 ##   5    cycle the style presets        Q  cycle quality presets
-##   R    toggle storm turbidity (WaterManager.storm_turbidity: rain muddies everything)
+##   R    rain: off / shower / downpour (WaterManager.rain_intensity: falling
+##        streaks, rain_ripples: drops ringing the water, storm_turbidity: mud)
+##   T    raindrop ripples on the water alone, on / off (rain_ripples)
 ##   L    drop a floating log at the LogSpawn marker (if the scene has one)
 ##   [ ]  less / more water: scales every river's discharge and re-bakes the
 ##        flow at runtime (WaterRiver.discharge; junction chains re-solve in order)
@@ -44,7 +46,7 @@ func _refresh() -> void:
 	if _help:
 		keys = _full_help()
 	else:
-		keys = "1-4 debug views   Q quality   R rain   [ ] flow"
+		keys = "1-4 debug views   Q quality   R rain   T ripples   [ ] flow"
 		if allow_style_cycle:
 			keys += "   5 style"
 		if _spawn() != null:
@@ -70,7 +72,8 @@ func _full_help() -> String:
 	lines.append("1 final look   2 flow speed (blue slow -> white fast)   3 foam mask   4 depth")
 	lines.append("[ less water   ] more water: scales river discharge and re-bakes (now x%.2f)" % _flow_scale)
 	lines.append("Q quality preset: Deck / Low / Medium / High (now %s)" % q)
-	lines.append("R rain: storm turbidity muddies every river at once")
+	lines.append("R rain: off / shower / downpour - drops ring the water, rivers run muddy")
+	lines.append("T raindrop ripples on the water alone, without falling rain")
 	if allow_style_cycle:
 		lines.append("5 next style: " + ", ".join(STYLES))
 	if _spawn() != null:
@@ -181,8 +184,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_R:
 			var mgr2 := get_tree().root.get_node_or_null("WaterManager")
 			if mgr2 != null:
-				mgr2.storm_turbidity = 0.0 if mgr2.storm_turbidity > 0.01 else 0.6
-				_status = "storm turbidity: %.1f" % mgr2.storm_turbidity
+				# off -> shower -> downpour -> off; the runoff muddies the water
+				var next := 0.5 if mgr2.rain_intensity < 0.01 else (1.0 if mgr2.rain_intensity < 0.99 else 0.0)
+				mgr2.rain_intensity = next
+				mgr2.rain_ripples = next
+				mgr2.storm_turbidity = next * 0.6
+				_status = "rain: %s (rain_intensity %.1f, storm_turbidity %.1f)" % [
+					["off", "shower", "downpour"][int(next * 2.0)], next, mgr2.storm_turbidity]
+		KEY_T:
+			var mgr3 := get_tree().root.get_node_or_null("WaterManager")
+			if mgr3 != null:
+				mgr3.rain_ripples = 0.0 if mgr3.rain_ripples > 0.01 else 0.7
+				_status = "raindrop ripples: %.1f (falling rain %.1f)" % [mgr3.rain_ripples, mgr3.rain_intensity]
 		KEY_BRACKETLEFT:
 			_set_flow_scale(bodies, _flow_scale / 1.4)
 			return

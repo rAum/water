@@ -14,6 +14,7 @@
 //   FOAM_BUBBLES           realistic foam breaks up bubble by bubble (foam_tex)
 //   VERTEX_WAVES           standing waves + ripples displace vertices
 //   SSR                    screen-space reflections of banks, rocks, trees
+//   RAIN_LAYERS 1..3       raindrop rings + splashes (rain_intensity > 0)
 //
 // Mesh contract (built by water_river.gd / water_pond.gd):
 //   UV      = baked-grid uv for flow_tex / aux_tex
@@ -33,6 +34,57 @@
 // at the surface as drawn, waves and all, not at the baked mean level.
 global uniform float flowing_water_time;
 #define TIME flowing_water_time
+
+// Rain on the water, 0..1 (WaterManager.rain_intensity). Every variant
+// roughens the surface with it; RAIN_LAYERS (1-3, not on the far shaders)
+// also draws the drops: rings and splashes, procedural, no texture and no
+// simulation. At 0 the whole block is skipped by one uniform branch.
+global uniform float flowing_water_rain;
+
+#ifdef RAIN_LAYERS
+vec3 rain_hash3(vec2 p) {
+	vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+	q += dot(q, q.yzx + 33.33);
+	return fract((q.xxy + q.yzz) * q.zyx);
+}
+
+// One layer of drops: at most one drop per cell per cycle, landing at a
+// random place and moment, with its own size and strength. Each layer's
+// grid is turned and scaled differently, so no row or rhythm shows. The grid
+// drifts with the current during a cycle, so the rings ride the water; it
+// jumps back only when the cycle starts over and every ring of it has died.
+// Returns the radial slope (xy, metric frame) and the splash (z).
+vec3 rain_layer(vec2 p, vec2 flow, mat2 rot, float cell, float rate, float seed, float density) {
+	float cyc = TIME * rate + seed;
+	float a = fract(cyc);
+	float n = floor(cyc);
+	vec2 q = rot * (p - flow * (a / rate)) / cell;
+	vec2 id = floor(q);
+	vec3 h = rain_hash3(id * 1.37 + vec2(n * 17.13 + seed * 31.0, n * 7.71 - seed * 5.3));
+	if (h.z > density) {
+		return vec3(0.0);
+	}
+	vec3 g = rain_hash3(id.yx * 2.13 + vec2(n * 3.17 + seed * 11.0, n * 13.9));
+	// big drops ring long and wide, small ones are gone in a moment
+	float size = mix(0.4, 1.0, g.x * g.x);
+	float life = mix(0.3, 0.7, size);
+	float t = (a - g.y * (1.0 - life)) / life;
+	if (t <= 0.0 || t >= 1.0) {
+		return vec3(0.0);
+	}
+	vec2 d = q - id - (vec2(0.3) + h.xy * 0.4);
+	float r = length(d) / size;
+	// the ring runs out fast and slows down (radius ~ sqrt of its age), a
+	// second, weaker one trails it; both flatten as they spread
+	float front = sqrt(t) * 0.25;
+	float x = (r - front) * 40.0;
+	float env = exp(-x * x * 0.11) * (1.0 - t) * (1.0 - t);
+	float slope = sin(x * 1.9) * env * mix(0.5, 1.4, g.z) * mix(0.8, 1.3, size);
+	// the splash: a drop's crown flashing white for an instant where it hits
+	float splash = (1.0 - smoothstep(0.02, 0.05, r)) * (1.0 - smoothstep(0.0, 0.12, t)) * size;
+	return vec3(transpose(rot) * (d / max(length(d), 1e-4)) * slope, splash);
+}
+#endif
 
 #ifdef USE_SCREEN_TEXTURE
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap, repeat_disable;
@@ -507,6 +559,42 @@ void fragment() {
 	// player ripples bend the normal everywhere inside the ripple grid
 	vec3 rip = ripple_sample(v_world.xz);
 	sl += rip.yz * 2.0;
+	// --- rain: rings where the drops land, and a pelted, matte surface --------
+	float rain_splash = 0.0;
+	float rain_w = 0.0;
+	if (flowing_water_rain > 0.001) {
+		// not on a falling sheet; in white water the rings are lost in the churn
+		rain_w = flowing_water_rain * (1.0 - fall) * step(v_fall_t, 0.001)
+			* (1.0 - smoothstep(1.5, 3.5, speed));
+		float rd = length(v_world - (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz);
+		// rain falls in patches and gusts: how hard it comes down drifts over
+		// the water (one low-mip read), so the drops never cover it evenly
+		float rain_patch = smoothstep(0.3, 0.7, textureLod(noise_tex, v_world.xz * 0.045 + TIME * vec2(0.013, 0.008), 3.0).b);
+		// the fine chop of countless small drops: two fine noise reads
+		// running against each other, so it boils instead of sliding
+		float chop_w = rain_w * (1.0 - smoothstep(30.0, 70.0, rd));
+		if (chop_w > 0.01) {
+			vec2 c1 = texture(noise_tex, v_metric * 1.9 + vec2(TIME * 0.37, TIME * 0.21)).rg - 0.5;
+			vec2 c2 = texture(noise_tex, v_metric * 2.7 - vec2(TIME * 0.29, -TIME * 0.41)).rg - 0.5;
+			sl += (c1 + c2) * 0.22 * chop_w * mix(0.45, 1.2, rain_patch);
+		}
+#ifdef RAIN_LAYERS
+		// single rings only up close: past ~30 m they are below a pixel
+		float ring_w = rain_w * (1.0 - smoothstep(14.0, 30.0, rd));
+		if (ring_w > 0.01) {
+			float dens = mix(0.3, 1.0, flowing_water_rain) * mix(0.35, 1.3, rain_patch);
+			vec3 rr = rain_layer(v_metric, flow, mat2(vec2(0.946, 0.326), vec2(-0.326, 0.946)), 0.53, 1.07, 0.0, dens);
+#if RAIN_LAYERS >= 2
+			rr += rain_layer(v_metric + vec2(3.7, 1.9), flow, mat2(vec2(0.438, -0.899), vec2(0.899, 0.438)), 0.41, 1.31, 0.41, dens);
+#endif
+#if RAIN_LAYERS >= 3
+			rr += rain_layer(v_metric + vec2(0.17, 7.29), flow, mat2(vec2(-0.682, 0.731), vec2(-0.731, -0.682)), 0.71, 0.83, 0.73, dens);
+#endif
+			sl += rr.xy * ring_w;
+			rain_splash = clamp(rr.z, 0.0, 1.0) * ring_w * (1.0 - smoothstep(8.0, 18.0, rd));
+		}
+#endif
+	}
 	// foam is a mat of bubbles: it loses the mirror-smooth wavelets but
 	// keeps a lumpy surface of its own
 	sl = mix(sl, detail_slope * 0.9 + (bub.ba - 0.5) * 1.0 * bub_w, foam * 0.7);
@@ -894,6 +982,15 @@ void fragment() {
 		float spec = s_specular;
 		if (s_sharp > 0.5) {
 			rough = 0.03;
+		}
+		// rain: the pelted surface blurs the sky it mirrors and goes a shade
+		// darker; each drop throws up a little white crown where it lands
+		if (rain_w > 0.001) {
+			rough = mix(rough, max(rough, 0.15), rain_w);
+			albedo *= 1.0 - 0.1 * rain_w;
+			emission *= 1.0 - 0.1 * rain_w;
+			albedo = mix(albedo, s_foam_color * 0.85, rain_splash * 0.8);
+			emission *= 1.0 - rain_splash * 0.8;
 		}
 		// a bubble mat scatters, it does not mirror: little sky in it (a
 		// glossy foam picks up the blue of the sky and reads as a cold film)
