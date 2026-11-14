@@ -453,6 +453,7 @@ func _apply_style() -> void:
 		_material.set_shader_parameter("vertex_wave_max_dist", mgr.vertex_wave_distance())
 		_material.set_shader_parameter("noise_tex", mgr.noise_texture)
 		_material.set_shader_parameter("fall_tex", mgr.fall_texture)
+		_material.set_shader_parameter("foam_tex", mgr.foam_texture)
 	_bind_baked_textures()
 	# rivers that blend into this pond carry its style as their second style
 	for j in _junctions:

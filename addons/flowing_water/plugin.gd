@@ -66,5 +66,7 @@ func _ensure_noise_texture() -> void:
 		ResourceSaver.save(WaterNoise.generate(512), path, ResourceSaver.FLAG_COMPRESS)
 	if not ResourceLoader.exists(ADDON + "render/water_fall.res"):
 		ResourceSaver.save(WaterNoise.generate_fall(512), ADDON + "render/water_fall.res", ResourceSaver.FLAG_COMPRESS)
+	if not ResourceLoader.exists(ADDON + "render/water_foam.res"):
+		ResourceSaver.save(WaterNoise.generate_foam(512), ADDON + "render/water_foam.res", ResourceSaver.FLAG_COMPRESS)
 	if not ResourceLoader.exists(ADDON + "render/water_puff.res"):
 		ResourceSaver.save(WaterNoise.generate_puff(128), ADDON + "render/water_puff.res", ResourceSaver.FLAG_COMPRESS)

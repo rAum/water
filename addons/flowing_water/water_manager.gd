@@ -19,6 +19,7 @@ enum Quality { DECK, LOW, MEDIUM, HIGH }
 const ADDON := "res://addons/flowing_water/"
 const NOISE_PATH := ADDON + "render/water_noise.res"
 const FALL_PATH := ADDON + "render/water_fall.res"
+const FOAM_PATH := ADDON + "render/water_foam.res"
 
 ## Quality preset table (Milestone 9).
 const PRESETS := {
@@ -114,6 +115,8 @@ var noise_texture: Texture2D
 ## The waterfall "fluid" texture (curtains, strands and fibres of falling
 ## water), scrolled along falls by the surface shader.
 var fall_texture: Texture2D
+## Close-range foam bubbles (realistic styles; see WaterNoise.generate_foam).
+var foam_texture: Texture2D
 
 var _bodies: Array[Node3D] = []
 var _junctions: Array[Node3D] = []
@@ -156,6 +159,12 @@ func _enter_tree() -> void:
 		fall_texture = WaterNoise.generate_fall(512)
 		if Engine.is_editor_hint():
 			ResourceSaver.save(fall_texture, FALL_PATH, ResourceSaver.FLAG_COMPRESS)
+	if ResourceLoader.exists(FOAM_PATH):
+		foam_texture = load(FOAM_PATH)
+	else:
+		foam_texture = WaterNoise.generate_foam(512)
+		if Engine.is_editor_hint():
+			ResourceSaver.save(foam_texture, FOAM_PATH, ResourceSaver.FLAG_COMPRESS)
 	RenderingServer.global_shader_parameter_set("flowing_water_noise", noise_texture)
 	RenderingServer.global_shader_parameter_set("flowing_water_map_rect", Vector4(0, 0, 1, 0))
 	RenderingServer.global_shader_parameter_set("flowing_water_ripple_rect", Vector4(0, 0, 1, 0))

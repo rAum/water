@@ -8,4 +8,5 @@ render_mode depth_draw_always, cull_disabled, specular_schlick_ggx;
 #define USE_DEPTH_BUFFER
 #define REFRACTION_SIMPLE
 #define VERTEX_WAVES
+#define FOAM_BUBBLES
 #include "water_surface_body.gdshaderinc"
