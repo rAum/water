@@ -49,6 +49,8 @@ const OVERLAP_LIFT := 0.03
 const FADE_START := 0.15
 
 var _extension: MeshInstance3D
+# [pond, direction] when the river was last linked: a change means a rebuild
+var _linked: Array = []
 # cached shore crossing: x = arc length, y/z = fade range inside the shore
 var _cache := Vector3.ZERO
 var _cache_valid := false
@@ -98,14 +100,21 @@ func _connect_bodies() -> void:
 		return
 	var river := get_river()
 	var pond := get_pond()
+	var changed := false
 	if river != null:
-		river.set_junction(self, direction == Direction.RIVER_INTO_POND)
+		changed = river.set_junction(self, direction == Direction.RIVER_INTO_POND)
+		# a new pond or direction changes the fade too, with the river's junction the same
+		var linked := [pond, direction]
+		changed = changed or linked != _linked
+		_linked = linked
 	if pond != null:
 		pond.register_junction(self)
 	_update_blend()
 	# the river's mesh carries the overlap fade: rebuild it now that it
-	# knows its pond (the river may have been built before this node)
-	if river != null and river.is_node_ready():
+	# knows its pond (the river may have been built before this node).
+	# A river told its junction before it was built (set_junction, then
+	# add_child) already has the fade: rebuilding would build the same mesh.
+	if changed and river != null and river.is_node_ready():
 		river.rebuild_mesh()
 	update_configuration_warnings()
 

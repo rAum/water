@@ -1706,11 +1706,17 @@ func get_water_aabb() -> AABB:
 
 # ----------------------------------------------------------- junction support --
 
-func set_junction(junction: Node, at_end: bool) -> void:
+## Returns true when this changed the river (its mesh then needs a rebuild).
+func set_junction(junction: Node, at_end: bool) -> bool:
 	if at_end:
+		if _junction_b == junction:
+			return false
 		_junction_b = junction
 	else:
+		if _junction_a == junction:
+			return false
 		_junction_a = junction
+	return true
 
 
 ## Flow profile of the last baked row: [fluxes, foam, aeration, world
