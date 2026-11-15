@@ -27,21 +27,25 @@ const PRESETS := {
 		"shader_suffix": "deck", "vertex_wave_dist": 25.0, "ripple_grid": 128,
 		"ripple_steps": 1, "map_size": 192, "caustics": 1.0, "spray": 0.35,
 		"underwater_full": false, "underwater_shafts": 0, "underwater_motes": 0,
+		"rain_drops": 1400,
 	},
 	Quality.LOW: {
 		"shader_suffix": "low", "vertex_wave_dist": 20.0, "ripple_grid": 0,
 		"ripple_steps": 0, "map_size": 192, "caustics": 0.0, "spray": 0.2,
 		"underwater_full": false, "underwater_shafts": 0, "underwater_motes": 0,
+		"rain_drops": 1000,
 	},
 	Quality.MEDIUM: {
 		"shader_suffix": "full", "vertex_wave_dist": 40.0, "ripple_grid": 192,
 		"ripple_steps": 2, "map_size": 320, "caustics": 1.0, "spray": 0.7,
 		"underwater_full": true, "underwater_shafts": 6, "underwater_motes": 2,
+		"rain_drops": 2600,
 	},
 	Quality.HIGH: {
 		"shader_suffix": "full", "vertex_wave_dist": 60.0, "ripple_grid": 256,
 		"ripple_steps": 2, "map_size": 320, "caustics": 1.0, "spray": 1.0,
 		"underwater_full": true, "underwater_shafts": 12, "underwater_motes": 4,
+		"rain_drops": 4000,
 	},
 }
 
@@ -97,6 +101,44 @@ var quality: Quality = Quality.HIGH:
 		_apply_quality()
 		quality_changed.emit(v)
 
+## Water surfaces are not drawn beyond this many metres from the camera
+## (0 = no limit: the camera's far plane decides). For open worlds, set it
+## to the distance your terrain and fog make sense to: past it every river
+## chunk, pond tile and junction stops costing anything. Surfaces fade out
+## over the last `draw_distance_fade` of the range instead of popping.
+var draw_distance := 0.0:
+	set(v):
+		draw_distance = maxf(v, 0.0)
+		_apply_draw_distance()
+## Fraction of `draw_distance` over which the surface fades out.
+var draw_distance_fade := 0.1:
+	set(v):
+		draw_distance_fade = clampf(v, 0.0, 0.5)
+		_apply_draw_distance()
+
+## Where the simulation is centred: the player (or whatever should keep the
+## water around it alive). Null = the current camera. Floaters sleep and
+## water data streams out by their distance from this node.
+var sim_focus: Node3D
+## Floaters (logs, crates, boats) further than this from `sim_focus` go to
+## sleep: the body is frozen where it is and nothing is computed for it
+## until the focus comes back within range (0 = never sleep).
+var sim_distance := 150.0:
+	set(v):
+		sim_distance = maxf(v, 0.0)
+## Water bodies further than this from `sim_focus` release their per-cell
+## flow data (the bulk of their memory; the surface keeps drawing) and read
+## it back from disk in the background when the focus returns within it
+## (0 = keep everything loaded). Queries over released water find no water,
+## and floaters there sleep. Only bakes saved to files of their own stream.
+var stream_distance := 0.0:
+	set(v):
+		stream_distance = maxf(v, 0.0)
+
+## Emitted when a body's flow data was released (`loaded` false) or has been
+## read back (`loaded` true).
+signal stream_changed(body: Node3D, loaded: bool)
+
 ## Extra turbidity (0-1) added to every water style at runtime: raise it
 ## after rain or during a flood and all rivers turn muddy together.
 var storm_turbidity := 0.0:
@@ -110,6 +152,35 @@ var storm_color := Color(0.33, 0.24, 0.13):
 		storm_color = v
 		RenderingServer.global_shader_parameter_set("flowing_water_storm_color", Vector3(v.r, v.g, v.b))
 
+## Falling rain, 0 (off, the default) to 1 (a downpour): streaks of rain
+## around the camera (outside the editor), from one particle emitter with
+## `PRESETS[..]["rain_drops"]` drops at full intensity, freed at 0.
+## The drops landing on the water are `rain_ripples`, set on their own (a
+## shower seen from under a roof, rings without streaks, or the reverse).
+## Pair them with `storm_turbidity` for a storm that also muddies the rivers.
+var rain_intensity := 0.0:
+	set(v):
+		rain_intensity = clampf(v, 0.0, 1.0)
+		_update_rain_emitter()
+
+## Raindrops hitting the water, 0 (off, the default) to 1 (a downpour):
+## rings and splashes near the camera, scattered in drifting patches, and a
+## rougher, slightly darker surface. Independent of `rain_intensity`. Costs
+## a few instructions per pixel of water (fewer drop layers on Deck/Low,
+## none on the far LOD), and nothing at 0: one branch on a shader global.
+var rain_ripples := 0.0:
+	set(v):
+		rain_ripples = clampf(v, 0.0, 1.0)
+		RenderingServer.global_shader_parameter_set("flowing_water_rain", rain_ripples)
+
+## Colour (and, in alpha, the opacity) of the falling rain streaks. Raise it
+## toward white in bright light, lower it at dusk.
+var rain_color := Color(0.72, 0.75, 0.78, 0.3):
+	set(v):
+		rain_color = v
+		if _rain != null:
+			_rain.set_color(v)
+
 ## The noise texture every water shader shares (slopes/height/ridged foam).
 var noise_texture: Texture2D
 ## The waterfall "fluid" texture (curtains, strands and fibres of falling
@@ -119,6 +190,7 @@ var fall_texture: Texture2D
 var foam_texture: Texture2D
 
 var _bodies: Array[Node3D] = []
+var _rain: WaterRain
 var _junctions: Array[Node3D] = []
 var _ripples: RippleSim
 var _player_pos := Vector3.ZERO
@@ -172,6 +244,7 @@ func _enter_tree() -> void:
 	RenderingServer.global_shader_parameter_set("flowing_water_turbidity", storm_turbidity)
 	RenderingServer.global_shader_parameter_set("flowing_water_storm_color",
 		Vector3(storm_color.r, storm_color.g, storm_color.b))
+	RenderingServer.global_shader_parameter_set("flowing_water_rain", rain_ripples)
 
 
 func _ready() -> void:
@@ -192,7 +265,7 @@ func _ready() -> void:
 func _precompile_shaders() -> void:
 	for f in ["water_full", "water_deck", "water_low", "water_far",
 			"water_stylized", "water_stylized_low", "water_stylized_far",
-			"water_spray", "rock_receiver"]:
+			"water_spray", "water_rain", "rock_receiver"]:
 		load(ADDON + "render/" + f + ".gdshader")
 
 
@@ -223,10 +296,27 @@ func _process(delta: float) -> void:
 		RenderingServer.global_shader_parameter_set("flowing_water_map_focus",
 			Vector4(_player_pos.x, _player_pos.z, fade.x, fade.y))
 	_update_world_map()
+	# bodies moved at runtime (a level streamed in at an offset, a moving
+	# platform): the query grid indexes them by position
+	_grid_check_accum += delta
+	if _grid_check_accum > 0.5:
+		_grid_check_accum = 0.0
+		for body in _bodies:
+			if is_instance_valid(body) and _grid_xforms.get(body, body.global_transform) != body.global_transform:
+				_grid_dirty = true
+				break
 	if _ripples != null:
 		_ripples.focus_position = _player_pos
 	if not Engine.is_editor_hint():
 		_update_underwater(delta)
+		if _rain != null:
+			_rain.follow(get_viewport().get_camera_3d() if get_viewport() != null else null,
+				_camera_under, get_wind(_player_pos))
+		_sim_accum += delta
+		if _sim_accum >= SIM_CHECK_INTERVAL:
+			_sim_accum = 0.0
+			_update_streaming()
+			_update_floaters()
 
 
 # ------------------------------------------------------------------ registry --
@@ -239,7 +329,17 @@ func register_body(body: Node3D) -> void:
 
 func unregister_body(body: Node3D) -> void:
 	_bodies.erase(body)
+	_body_loaded.erase(body)
 	invalidate_map()
+
+
+func register_floater(f: Node3D) -> void:
+	if not _floaters.has(f):
+		_floaters.append(f)
+
+
+func unregister_floater(f: Node3D) -> void:
+	_floaters.erase(f)
 
 
 func register_junction(j: Node3D) -> void:
@@ -256,6 +356,234 @@ func unregister_junction(j: Node3D) -> void:
 func invalidate_map() -> void:
 	_map_valid_for_bodies = false
 	_build = null
+	_grid_dirty = true
+
+
+## A body's surface changed shape or place (re-mesh): re-index it for queries.
+func invalidate_query_grid() -> void:
+	_grid_dirty = true
+
+
+# ---------------------------------------------------------------- query grid --
+
+## Side of a query-grid cell (m). Each cell lists the bodies whose surface
+## boxes touch it; a query asks only those.
+const QUERY_CELL := 32.0
+const _EMPTY: Array = []
+var _grid: Dictionary = {}           # Vector2i -> Array[Node3D]
+var _grid_always: Array[Node3D] = [] # bodies without boxes: asked everywhere
+var _grid_xforms: Dictionary = {}    # body -> transform when indexed
+var _grid_boxes: Dictionary = {}     # body -> its surface boxes when indexed
+var _grid_dirty := true
+var _grid_check_accum := 0.0
+
+func _rebuild_query_grid() -> void:
+	_grid_dirty = false
+	_grid.clear()
+	_grid_always.clear()
+	_grid_xforms.clear()
+	_grid_boxes.clear()
+	for body in _bodies:
+		if not is_instance_valid(body) or not body.has_method("query_water"):
+			continue
+		_grid_xforms[body] = body.global_transform
+		var boxes: Array = []
+		if body.has_method("get_water_boxes"):
+			boxes = body.get_water_boxes()
+		elif body.has_method("get_water_aabb"):
+			boxes = [body.get_water_aabb()]
+		_grid_boxes[body] = boxes
+		if boxes.is_empty():
+			_grid_always.append(body)
+			continue
+		for box: AABB in boxes:
+			var b := box.grow(1.0)
+			var c0 := Vector2i(floori(b.position.x / QUERY_CELL), floori(b.position.z / QUERY_CELL))
+			var c1 := Vector2i(floori(b.end.x / QUERY_CELL), floori(b.end.z / QUERY_CELL))
+			for cz in range(c0.y, c1.y + 1):
+				for cx in range(c0.x, c1.x + 1):
+					var k := Vector2i(cx, cz)
+					var list: Array = _grid.get(k, [])
+					if list.is_empty():
+						_grid[k] = list
+					if not list.has(body):
+						list.append(body)
+
+
+# ------------------------------------------------------------------------ LOD --
+
+## Distance at which a surface switches to the cheap `_far` shader: past
+## the point where vertex waves and refraction have faded out in the full one.
+func far_lod_distance() -> float:
+	return vertex_wave_distance() * 1.5 + 50.0
+
+
+func _apply_draw_distance() -> void:
+	for body in _bodies:
+		if is_instance_valid(body) and body.has_method("apply_draw_distance"):
+			body.apply_draw_distance()
+	for j in _junctions:
+		if is_instance_valid(j) and j.has_method("apply_draw_distance"):
+			j.apply_draw_distance()
+
+
+## Applies the water draw distance to one of the water's mesh instances.
+func set_draw_range(gi: GeometryInstance3D) -> void:
+	if gi == null:
+		return
+	if draw_distance <= 0.0:
+		gi.visibility_range_end = 0.0
+		gi.visibility_range_end_margin = 0.0
+		gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+		return
+	var margin := draw_distance * draw_distance_fade
+	gi.visibility_range_end = draw_distance - margin * 0.5
+	gi.visibility_range_end_margin = margin
+	# water is already drawn in the transparent pass: fading costs nothing
+	gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF \
+		if margin > 0.0 else GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+
+
+# --------------------------------------------------- sleep and streaming --
+
+const SIM_CHECK_INTERVAL := 0.25
+## Things go to sleep (or release their data) only this much further out
+## than they wake (or load), so nothing flips back and forth at the edge.
+const SIM_HYSTERESIS := 1.15
+var _sim_accum := 0.0
+var _floaters: Array[Node3D] = []
+var _loading: Dictionary = {}        # file path -> WaterData waiting for its copy
+var _body_loaded: Dictionary = {}    # body -> false while any of its data is released
+
+
+## Position the simulation is centred on: `sim_focus`, else the camera.
+func sim_focus_position() -> Vector3:
+	if sim_focus != null and is_instance_valid(sim_focus) and sim_focus.is_inside_tree():
+		return sim_focus.global_position
+	return _player_pos
+
+
+## True once there is a focus: `sim_focus` or a camera.
+func has_sim_focus() -> bool:
+	return (sim_focus != null and is_instance_valid(sim_focus) and sim_focus.is_inside_tree()) \
+		or _has_focus_pos
+
+
+## Metres from `pos` to the nearest part of the body's surface boxes.
+func body_distance(body: Node3D, pos: Vector3) -> float:
+	if _grid_dirty:
+		_rebuild_query_grid()
+	var boxes: Array = _grid_boxes.get(body, _EMPTY)
+	if boxes.is_empty():
+		return pos.distance_to(body.global_position)
+	var best := INF
+	for box: AABB in boxes:
+		best = minf(best, pos.clamp(box.position, box.end).distance_to(pos))
+	return best
+
+
+## False while the body's flow data is streamed out (see `stream_distance`).
+func is_body_loaded(body: Node3D) -> bool:
+	return _body_loaded.get(body, true)
+
+
+## False if any water at `pos` has its flow data streamed out: a query there
+## could miss water that is really there.
+func is_loaded_at(pos: Vector3) -> bool:
+	if _body_loaded.is_empty():
+		return true
+	if _grid_dirty:
+		_rebuild_query_grid()
+	var near: Array = _grid.get(Vector2i(floori(pos.x / QUERY_CELL), floori(pos.z / QUERY_CELL)), _EMPTY)
+	for body in near:
+		if _body_loaded.has(body):
+			return false
+	for body in _grid_always:
+		if _body_loaded.has(body):
+			return false
+	return true
+
+
+static func _body_data(body: Node3D) -> Array:
+	if body is WaterRiver:
+		return (body as WaterRiver).baked_segments.filter(func(d): return d != null)
+	if body is WaterPond and (body as WaterPond).baked_data != null:
+		return [(body as WaterPond).baked_data]
+	return []
+
+
+func _update_streaming() -> void:
+	# copies read in the background: hand their arrays to the data in use
+	for path: String in _loading.keys():
+		var st := ResourceLoader.load_threaded_get_status(path)
+		if st == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			continue
+		var data: WaterData = _loading[path]
+		_loading.erase(path)
+		if st == ResourceLoader.THREAD_LOAD_LOADED:
+			var copy := ResourceLoader.load_threaded_get(path) as WaterData
+			if copy != null and not data.is_resident():
+				data.take_cells(copy)
+		else:
+			push_warning("Flowing Water: could not read back %s" % path)
+	if not has_sim_focus() and stream_distance > 0.0:
+		return
+	var p := sim_focus_position()
+	# one decision per data file (bodies can share one: duplicated rivers)
+	var dist: Dictionary = {}
+	for body in _bodies:
+		if not is_instance_valid(body):
+			continue
+		var datas := _body_data(body)
+		if datas.is_empty():
+			continue
+		var d := body_distance(body, p) if stream_distance > 0.0 else 0.0
+		for data: WaterData in datas:
+			dist[data] = minf(dist.get(data, INF), d)
+	for data: WaterData in dist:
+		var d: float = dist[data]
+		if data.is_resident():
+			if stream_distance > 0.0 and d > stream_distance * SIM_HYSTERESIS and data.can_stream():
+				data.release_cells()
+		elif (stream_distance <= 0.0 or d <= stream_distance) and not _loading.has(data.resource_path):
+			var err := ResourceLoader.load_threaded_request(data.resource_path, "", false,
+				ResourceLoader.CACHE_MODE_IGNORE)
+			if err == OK:
+				_loading[data.resource_path] = data
+	# tell bodies (and listeners) whose data went or came back
+	for body in _bodies:
+		if not is_instance_valid(body):
+			continue
+		var loaded := _body_data(body).all(func(d): return d.is_resident())
+		if loaded != is_body_loaded(body):
+			if loaded:
+				_body_loaded.erase(body)
+			else:
+				_body_loaded[body] = false
+			if body.has_method("on_stream_changed"):
+				body.on_stream_changed(loaded)
+			if loaded and not _map_follows:
+				invalidate_map()
+			stream_changed.emit(body, loaded)
+
+
+func _update_floaters() -> void:
+	if not has_sim_focus():
+		return
+	var p := sim_focus_position()
+	for n in range(_floaters.size() - 1, -1, -1):
+		var f: Node3D = _floaters[n]
+		if not is_instance_valid(f):
+			_floaters.remove_at(n)
+			continue
+		var asleep: bool = f.is_sim_asleep()
+		var reach := sim_distance * (SIM_HYSTERESIS if not asleep else 1.0)
+		var awake := sim_distance <= 0.0 or f.global_position.distance_to(p) < reach
+		# never simulate over water whose data is out: the body would sink
+		if awake and not is_loaded_at(f.global_position):
+			awake = false
+		if awake == asleep:
+			f.set_sim_asleep(not awake)
 
 
 func get_bodies() -> Array[Node3D]:
@@ -277,8 +605,15 @@ func query(pos: Vector3, out: WaterQuery = null) -> WaterQuery:
 	var flow := Vector3.ZERO
 	var depth := 0.0
 	var best_w := 0.0
-	for body in _bodies:
-		if not body.has_method("query_water"):
+	if _grid_dirty:
+		_rebuild_query_grid()
+	# only the bodies whose surface reaches this cell, not every body in the
+	# world (a river's query walks its curve: far too slow to ask them all)
+	var cell := Vector2i(floori(pos.x / QUERY_CELL), floori(pos.z / QUERY_CELL))
+	var near: Array = _grid.get(cell, _EMPTY)
+	for n in near.size() + _grid_always.size():
+		var body: Node3D = near[n] if n < near.size() else _grid_always[n - near.size()]
+		if not is_instance_valid(body):
 			continue
 		var r: Array = body.query_water(pos)
 		if r.is_empty():
@@ -401,6 +736,27 @@ func _apply_quality() -> void:
 			body.apply_quality()
 	if _ripples != null:
 		_ripples.configure(p["ripple_grid"], p["ripple_steps"])
+	if _rain != null:
+		_rain.configure(p["rain_drops"], rain_intensity)
+
+
+## Creates the falling-rain emitter while it rains and frees it when the
+## rain stops: at 0 nothing of it exists. (Not in the editor: the rings on
+## the water show there, the streaks would only get in the way.)
+func _update_rain_emitter() -> void:
+	if not is_inside_tree() or Engine.is_editor_hint():
+		return
+	if rain_intensity <= 0.001:
+		if _rain != null:
+			_rain.queue_free()
+			_rain = null
+		return
+	if _rain == null:
+		_rain = WaterRain.new()
+		_rain.name = "Rain"
+		_rain.set_color(rain_color)
+		add_child(_rain)
+	_rain.configure(PRESETS[quality]["rain_drops"], rain_intensity)
 
 
 ## The shader file for a body, given its style variant and the distance class.
@@ -917,6 +1273,7 @@ const SHADER_GLOBALS := {
 	"flowing_water_caustics": ["float", 1.0],
 	"flowing_water_turbidity": ["float", 0.0],
 	"flowing_water_storm_color": ["vec3", Vector3(0.33, 0.24, 0.13)],
+	"flowing_water_rain": ["float", 0.0],
 }
 
 

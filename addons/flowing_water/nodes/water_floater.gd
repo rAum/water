@@ -45,8 +45,14 @@ var _auto_draft := 0.06
 var _stuck_time := 0.0
 var _last_wet_time := -100000
 
+var _asleep := false
+var _saved_motion: Array = []
+
 signal entered_water(speed: float)
 signal exited_water()
+## The body was frozen far from the WaterManager's sim_focus (true) or woke
+## up again (false).
+signal sim_sleep_changed(asleep: bool)
 
 
 func _get_configuration_warnings() -> PackedStringArray:
@@ -68,6 +74,62 @@ func _ready() -> void:
 	# lets game code find things the player can pick up or shove
 	_body.add_to_group("flowing_water_grabbable")
 	add_to_group(WaterRiver.FALL_BLOCKER_GROUP)
+	var mgr := get_tree().root.get_node_or_null("WaterManager")
+	if mgr != null:
+		mgr.register_floater(self)
+
+
+func _exit_tree() -> void:
+	if Engine.is_editor_hint() or _body == null:
+		return
+	var mgr := get_tree().root.get_node_or_null("WaterManager")
+	if mgr != null:
+		mgr.unregister_floater(self)
+
+
+func _enter_tree() -> void:
+	if is_node_ready() and not Engine.is_editor_hint() and _body != null:
+		var mgr := get_tree().root.get_node_or_null("WaterManager")
+		if mgr != null:
+			mgr.register_floater(self)
+
+
+## True while the body is frozen because it is far from the simulation's
+## focus (see WaterManager.sim_distance).
+func is_sim_asleep() -> bool:
+	return _asleep
+
+
+## Freezes the body where it is and stops all buoyancy work (true), or lets
+## it carry on with the speed it had (false). The WaterManager calls this by
+## distance from its sim_focus; call it yourself to park a floater.
+func set_sim_asleep(on: bool) -> void:
+	if _body == null or on == _asleep:
+		return
+	if on:
+		# frozen by the game (held, parked): not ours to touch
+		if _body.freeze:
+			return
+		# in the air (going over a fall): sleep once it has landed
+		if not in_water and _body.linear_velocity.y < -1.0:
+			return
+		_saved_motion = [_body.linear_velocity, _body.angular_velocity, _body.freeze_mode]
+		_body.constant_force = Vector3.ZERO
+		_body.constant_torque = Vector3.ZERO
+		_body.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+		_body.freeze = true
+		set_physics_process(false)
+	else:
+		_body.freeze = false
+		if not _saved_motion.is_empty():
+			_body.freeze_mode = _saved_motion[2]
+			_body.linear_velocity = _saved_motion[0]
+			_body.angular_velocity = _saved_motion[1]
+		_low_rate_accum = 0.0
+		_stuck_time = 0.0
+		set_physics_process(true)
+	_asleep = on
+	sim_sleep_changed.emit(on)
 
 
 ## The body as waterfalls see it: a short column at each sample point
@@ -127,12 +189,11 @@ func _physics_process(delta: float) -> void:
 	var mgr := get_tree().root.get_node_or_null("WaterManager")
 	if mgr == null:
 		return
-	# Far from the camera the forces are recomputed at a lower rate. They are
+	# Far from the focus (player or camera) the forces are recomputed at a lower rate. They are
 	# held as the body's constant force/torque in between, so buoyancy keeps
 	# acting every physics step no matter how often it is refreshed.
 	var far := false
-	var cam := get_viewport().get_camera_3d()
-	if cam != null and cam.global_position.distance_to(global_position) > 60.0:
+	if mgr.has_sim_focus() and mgr.sim_focus_position().distance_to(global_position) > 60.0:
 		far = true
 		_low_rate_accum += delta
 		if _low_rate_accum < 0.05:

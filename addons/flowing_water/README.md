@@ -2,8 +2,8 @@
 
 Rivers, streams, waterfalls and ponds for Godot 4.7. Draw a river down a
 slope, press **Bake**, and get water that flows correctly around rocks,
-reacts to the player, carries floating objects, and runs well on a Steam
-Deck. Pure GDScript and shaders — no GDExtension, nothing to compile.
+reacts to the player, and carries floating objects. It has a Steam Deck
+quality preset (not yet measured on a Deck). Pure GDScript and shaders — no GDExtension, nothing to compile.
 
 The flow is **baked once** from the river bed and the obstacles (the same
 pipeline as the mountain-stream prototype: depth → Manning speed → constant
@@ -229,6 +229,44 @@ added to every style, and `WaterManager.storm_color` is the mud it washes
 in. Tween it up after rain and every river in the level turns brown
 together - no re-bake, no material swaps.
 
+### Rain
+
+Two independent settings, both 0 (off) by default and 0-1 up to a downpour:
+
+- `WaterManager.rain_ripples`: drops landing on every water surface near
+  the camera. Each drop rings outward and fades, with a brief white crown
+  where it hits. Drops differ in size and strength, land at random places
+  and moments, and come down in drifting patches, so the rain never covers
+  the water evenly. On a river the rings ride the current. In white water
+  and on falls they are lost in the churn and are left out. A finer chop and
+  a slightly rougher, darker surface take over with distance. The rings are
+  procedural (no texture, no simulation). Cost: a few instructions per water
+  pixel and two noise reads. High and Medium use three drop layers, Deck
+  and stylized two, Low one, and the far LOD only the chop. At 0 all of it
+  is skipped by one branch on a shader global.
+- `WaterManager.rain_intensity`: streaks of falling rain around the camera,
+  from one `GPUParticles3D` (`render/water_rain.gd`) that follows the
+  camera and slants with `get_wind()`. The drops are a few millimetres
+  wide, never big transparent sprites, and fade near the camera and at the
+  edge of their 26 m box. The drop count at full intensity comes from the
+  preset (Deck 1400, Low 1000, Medium 2600, High 4000) and scales with the
+  intensity without restarting the emitter. They are hidden under water and
+  in the editor. At 0 the emitter is freed. `rain_color` sets their colour
+  and opacity.
+
+```gdscript
+WaterManager.rain_intensity = 1.0   # falling rain
+WaterManager.rain_ripples = 1.0     # drops on the water
+WaterManager.storm_turbidity = 0.6  # and the runoff muddies the rivers
+```
+
+Measured on an M4 Pro at 2560x1600, with the
+pond filling the view on High: ripples +0.8 ms (21.0 -> 21.9 ms), ripples
+plus falling rain +1.4 ms. Back at 0 the frame returns to the baseline.
+With the Deck preset on the same Mac the difference was below the noise of
+the measurement. (Metal has no GPU timestamps, so these are whole-frame
+times.) Not yet measured on a Steam Deck.
+
 ### Caustics
 
 Caustics are drawn **by the water surface itself**: it reconstructs the
@@ -294,6 +332,8 @@ WaterManager.get_depth(pos)
 WaterManager.get_body(pos)
 WaterManager.add_ripple(pos, strength, radius)
 WaterManager.storm_turbidity = 0.6   # rain: every river turns muddy
+WaterManager.rain_intensity = 1.0    # falling rain around the camera
+WaterManager.rain_ripples = 1.0      # raindrops ringing the water
 WaterManager.storm_color = Color(0.33, 0.24, 0.13)
 ```
 
@@ -406,6 +446,7 @@ override.
 | World water map | 128² | 128² | 256² | 256² |
 | Caustics (from the surface) | 1 sample | off | 2 samples | 2 samples |
 | Spray amount | 35 % | 20 % | 70 % | 100 % |
+| Rain: drop layers / falling drops | 2 / 1400 | 1 / 1000 | 3 / 2600 | 3 / 4000 |
 | Underwater | fog, 1-sample caustics, waterline | same as Deck | + shafts (6 steps), 2 particle shells, lens, bed mirror | + shafts (12 steps), 4 particle shells |
 
 Quality levels are **compiled shader variants** (`render/water_*.gdshader`
@@ -429,14 +470,80 @@ vertex waves and refraction have already faded to zero, so there is no pop.
 Water never stacks: only the junction blend zone is drawn twice. Bodies
 outside camera range skip particles, audio and low-rate their floaters.
 
-**Renderers**: Forward+ and Mobile are fully supported. Compatibility runs
-with these fallbacks: player ripples **off** (one warning — it has no
+### Large and open worlds
+
+What the water does to stay cheap from afar, and the one setting to make:
+
+- **Draw distance**: set `WaterManager.draw_distance` (metres, 0 = no
+  limit, the default) to where your terrain and fog stop. Every river
+  chunk, pond tile and junction gets that visibility range and fades out
+  over the last `draw_distance_fade` (10 %) instead of popping.
+- **Mesh LOD**: each 40 m river chunk carries four coarser index buffers
+  (every 2nd, 4th, 8th, 16th row and column) for Godot's automatic mesh
+  LOD. Rows that a straight interpolation would spoil (falling sheets,
+  their foot, junction fades, plunge churn) stay in every level, and each
+  level declares its real geometric error, so Godot switches levels before
+  the error is visible. (Checked on the author's scenes with the LODs forced
+  coarse: no cracks showed.)
+  The levels start around 160 m on a 1080p screen (well past the vertex
+  waves) and double per level. `rendering/mesh_lod/lod_change/threshold_pixels`
+  and `GeometryInstance3D.lod_bias` tune them as for any mesh.
+- **Pond tiles**: a pond is cut into 48 m tiles, and each tile switches
+  to the far shader by its own nearest point, so a lake no longer pays for
+  the full shader out to its far shore.
+- **Queries** (`WaterManager.query()` and the `get_*` wrappers, floaters,
+  interactors, underwater) look bodies up in a 32 m grid of their chunk
+  boxes instead of asking every body: with 100 rivers in the scene a query
+  costs about 1 µs instead of 350 µs (measured on an M4 Pro). Bodies moved at runtime are
+  re-indexed within half a second.
+- **The near/far shader check** reruns only after the camera moves 2 m.
+- **Wet bank decals** fade out from 90 m.
+- **The world water map** follows the camera on its own once the water
+  spans more than 8 km (see below).
+
+**Sleep and streaming** are measured from `WaterManager.sim_focus`, your
+player node (left empty, the camera is used):
+
+```gdscript
+WaterManager.sim_focus = $Player
+WaterManager.sim_distance = 150.0    # floaters sleep beyond (default; 0 = never)
+WaterManager.stream_distance = 400.0 # flow data streams beyond (default 0 = off)
+```
+
+- **Floaters sleep** further than `sim_distance` (150 m by default): the
+  body is frozen where it is and no buoyancy, drag or query runs for it.
+  When the focus comes back within range it carries on with the speed it
+  had. A body in the air (going over a fall) sleeps once it lands, and one
+  your game has frozen (held, parked) is left alone. Between 60 m and
+  `sim_distance` the forces are still refreshed at a lower rate.
+  `WaterFloater.set_sim_asleep()` parks one by hand, and its
+  `sim_sleep_changed` signal tells you when it goes or wakes.
+- **Flow data streams**: with `stream_distance` set, a body further than
+  that releases its per-cell flow arrays, the bulk of its memory and only
+  read by CPU queries. The surface keeps drawing: its mesh, textures and
+  per-row data stay. When the focus comes back within range the arrays are
+  read back from the bake's file in the background (about 0.3 s for the
+  author's demo scene on an M4 Pro) and `stream_changed(body, loaded)` fires.
+  While a body's data is out, queries over a river find no water and a
+  pond answers with its level and still water. Floaters never wake over
+  water that is out (`is_loaded_at()`), so nothing sinks. Keep
+  `stream_distance` above `sim_distance`. Only bakes saved to their own
+  `.res` files (the default) stream; data shared by duplicated bodies is
+  released only when all of them are far.
+
+The meshes and textures of every body stay in memory while its node is in
+the tree: load and unload whole bodies with your own world streaming.
+
+**Renderers**: developed and tested with Forward+ on macOS (Metal). The
+Mobile renderer uses the same shaders and Compatibility has these
+fallbacks, but neither has been tested yet: player ripples **off** (one warning — it has no
 compute shaders; see "Changes from the plan"), bake pressure solve on the
 CPU, underwater as environment fog, thickness from the baked depth.
 
 **Benchmark**: measured by flying a fixed path through the author's demo
 scene (stream, waterfall, pond, outlet) at all four presets, twice each
-(water shown/hidden), comparing frame and GPU time. Budgets: Deck ≤ 2.5 ms at 1280×800, Medium ≤ 2.5 ms at 1080p mid-range.
+(water shown/hidden), comparing frame and GPU time. Targets (not yet checked on that hardware):
+Deck ≤ 2.5 ms at 1280×800, Medium ≤ 2.5 ms at 1080p on a mid-range GPU.
 
 Measured on the development machine (Apple M4 Pro, 1280x800, Forward+,
 vsync off, flying the demo scene's fixed path; Metal does not expose GPU
@@ -450,9 +557,9 @@ Medium: frame avg 3.36 ms, worst 20.0 ms, water frame delta ~0.64 ms
 High:   frame avg 3.33 ms, worst 12.2 ms, water frame delta ~0.58 ms
 ```
 
-On this GPU the water costs about half a millisecond. **I have no Steam Deck here**:
-run `benchmark.tscn` on yours (Vulkan reports real GPU timings) and send
-the log; if the Deck preset misses 2.5 ms, the next things to cut are the
+On this GPU the water costs about half a millisecond. **Not yet measured on
+a Steam Deck** (Vulkan reports real GPU timings there). If the Deck preset
+misses 2.5 ms, the next things to cut are the
 ripple grid (128² → 96²), the spray amount, and the detail tile count
 (raise `foam_tile_size`).
 
@@ -517,8 +624,8 @@ scale with it. If absent, nothing breaks and nothing is logged.
    the cheap variant with hysteresis only past the distance where they
    have already faded out, so the switch is invisible.
 6. **Underwater effect** uses a uniform buffer instead of push constants
-   (the parameter block exceeds the 128-byte push-constant floor — the
-   Steam Deck's limit). It runs on every preset (Deck/Low leave out the
+   (the parameter block exceeds 128 bytes, the push-constant size Vulkan
+   guarantees on every GPU). It runs on every preset (Deck/Low leave out the
    shafts, particles and lens); only the Compatibility renderer falls back
    to environment fog.
 7. **`EditorInterface`** is accessed through `Engine.get_singleton()` in

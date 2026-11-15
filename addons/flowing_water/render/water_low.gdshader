@@ -5,4 +5,5 @@ shader_type spatial;
 render_mode depth_draw_always, cull_disabled, specular_schlick_ggx;
 #define DETAIL_LAYERS 1
 #define VERTEX_WAVES
+#define RAIN_LAYERS 1
 #include "water_surface_body.gdshaderinc"

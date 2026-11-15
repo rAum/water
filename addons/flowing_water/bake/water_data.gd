@@ -151,3 +151,53 @@ func build_textures() -> void:
 	aux_img.convert(Image.FORMAT_RGBAH)
 	flow_tex = ImageTexture.create_from_image(flow_img)
 	aux_tex = ImageTexture.create_from_image(aux_img)
+
+
+# ----------------------------------------------------------------- streaming --
+# Far from the player the per-cell arrays (the bulk of the memory; only CPU
+# queries read them) can be dropped and read back from the file later. The
+# per-row data, emission points and textures stay, so the surface keeps
+# drawing; queries over released data find no water (is_valid() is false).
+
+const CELL_ARRAYS: Array[StringName] = [&"vel_across", &"vel_along", &"depth", &"foam",
+	&"aeration", &"wake", &"surface_offset", &"cell_slope", &"fall_lead", &"fall_throw",
+	&"fall_sheet", &"fall_wet", &"obstacle"]
+
+var _released := false
+
+
+## True unless release_cells() dropped the per-cell arrays.
+func is_resident() -> bool:
+	return not _released
+
+
+## Only data saved in a file of its own can be read back.
+func can_stream() -> bool:
+	return resource_path != "" and not resource_path.contains("::")
+
+
+## Bytes the per-cell arrays take.
+func cell_bytes() -> int:
+	var n := 0
+	for name in CELL_ARRAYS:
+		var a = get(name)
+		n += a.size() * (1 if a is PackedByteArray else 4)
+	return n
+
+
+## Drops the per-cell arrays (keep the file: take_cells() restores them).
+func release_cells() -> void:
+	if _released or not can_stream():
+		return
+	for name in CELL_ARRAYS:
+		set(name, PackedByteArray() if name == &"obstacle" else PackedFloat32Array())
+	_released = true
+
+
+## Takes the per-cell arrays from a fresh copy of the same file.
+func take_cells(from: WaterData) -> void:
+	if from == null:
+		return
+	for name in CELL_ARRAYS:
+		set(name, from.get(name))
+	_released = false

@@ -12,4 +12,5 @@ render_mode depth_draw_always, cull_disabled, specular_schlick_ggx;
 #define FOAM_DETAIL
 #define CAUSTICS_FULL
 #define FOAM_BUBBLES
+#define RAIN_LAYERS 3
 #include "water_surface_body.gdshaderinc"
