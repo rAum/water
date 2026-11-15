@@ -1,0 +1,19 @@
+# Flowing Water
+
+Copyright 2026 Piotr Gródek and the Flowing Water contributors
+
+Licensed under the Apache License, Version 2.0.
+
+This repository (the addon in addons/flowing_water/ and the documentation)
+contains no third-party code or assets.
+
+The images in docs/images/ are the author's own renders of a demo scene
+that is not distributed here. That scene uses textures and scanned rock
+models from Poly Haven (https://polyhaven.com), published under CC0 1.0
+(public domain dedication); those assets are not included in this
+repository. "Poly Haven" is used only to identify the source and does not
+imply endorsement.
+
+Godot Engine, which this addon runs on, is a separate project under the
+MIT License (https://godotengine.org/license) and is not distributed with
+this product.

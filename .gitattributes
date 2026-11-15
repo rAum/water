@@ -1,0 +1,22 @@
+# Normalize text to LF everywhere (Godot writes LF)
+* text=auto eol=lf
+
+# Binary Godot resources and media
+*.res    binary
+*.scn    binary
+*.png    binary
+*.jpg    binary
+*.wav    binary
+*.bin    binary
+
+# Keep the GitHub/Asset Library zip to the addon plus license files:
+# everything below is left out of `git archive` downloads.
+/.gitattributes  export-ignore
+/.gitignore      export-ignore
+/.editorconfig   export-ignore
+/.github         export-ignore
+/CONTRIBUTING.md export-ignore
+/docs            export-ignore
+/examples        export-ignore
+/tools           export-ignore
+/project.godot   export-ignore
