@@ -2,8 +2,9 @@
 
 Rivers, streams, waterfalls and ponds for **Godot 4.7**. Draw a river down a
 slope, press **Bake**, and get water that flows around rocks, pushes the
-player, carries floating objects and runs well on a Steam Deck. Pure
-GDScript and shaders: no GDExtension, nothing to compile.
+player and carries floating objects. A Steam Deck quality preset is
+included (not yet measured on a Deck). Pure GDScript and shaders: no
+GDExtension, nothing to compile.
 
 <p align="center">
   <img src="docs/images/waterfall.jpg" alt="The demo scene: a stream pouring over a mossy rock ledge into a plunge pool" width="800">
