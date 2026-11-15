@@ -163,6 +163,7 @@ func _plunge_ripples(delta: float) -> void:
 
 func _on_curve_changed() -> void:
 	_falls_valid = false
+	_point_offsets_curve = null
 	_ensure_widths()
 	_mark_dirty()
 
@@ -206,19 +207,42 @@ func width_at_offset(offset: float) -> float:
 		return 2.0
 	if n == 1:
 		return widths[0]
-	# interpolate by the arc offsets of the control points
+	# interpolate by the arc offsets of the control points (cached: see _point_offsets)
+	var offs := _point_offsets()
 	var prev_off := 0.0
 	var prev_w := widths[0]
 	for p in range(1, n):
-		var off := curve.get_closest_offset(curve.get_point_position(p))
-		if p == n - 1:
-			off = curve.get_baked_length()
+		var off := offs[p]
 		if offset <= off or p == n - 1:
 			var t := 0.0 if off <= prev_off else clampf((offset - prev_off) / (off - prev_off), 0.0, 1.0)
 			return lerpf(prev_w, widths[mini(p, widths.size() - 1)], t)
 		prev_off = off
 		prev_w = widths[mini(p, widths.size() - 1)]
 	return widths[widths.size() - 1]
+
+
+# Arc offset of each control point (the last one is the baked length). Finding one
+# searches the whole baked curve, and width_at_offset runs for every row of a mesh or
+# bake, walking the points from the start: uncached, a long river's build went
+# quadratic in its length (a 400 m river: ~1.2 s, its last rows ~10x slower
+# than its first). Recomputed when the curve changes.
+var _point_offsets_cache := PackedFloat64Array()
+var _point_offsets_curve: Curve3D = null
+var _point_offsets_length := -1.0
+
+
+func _point_offsets() -> PackedFloat64Array:
+	var n := curve.point_count
+	var length := curve.get_baked_length()
+	# the signal clears it; the checks catch a curve swapped or edited before _ready
+	if _point_offsets_curve != curve or _point_offsets_cache.size() != n or _point_offsets_length != length:
+		_point_offsets_cache.resize(n)
+		for p in n:
+			_point_offsets_cache[p] = curve.get_closest_offset(curve.get_point_position(p))
+		_point_offsets_cache[n - 1] = length
+		_point_offsets_curve = curve
+		_point_offsets_length = length
+	return _point_offsets_cache
 
 
 # ------------------------------------------------------------- frame sampling --
