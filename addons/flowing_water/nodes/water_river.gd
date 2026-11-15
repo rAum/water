@@ -102,6 +102,11 @@ var _foot_dirs := PackedVector3Array()
 
 signal baked
 
+## Optional, set by a game's loading screen: called with 0..1 after each chunk of a mesh
+## build, so it can draw a frame. A long river's build runs for seconds on the main
+## thread. Unset (the editor, the plugin alone) it costs one check per chunk.
+static var build_progress: Callable
+
 
 func _ready() -> void:
 	curve_changed.connect(_on_curve_changed)
@@ -432,6 +437,8 @@ func rebuild_mesh() -> void:
 			chunk_end += 1
 		_build_chunk(row_s, chunk_start, chunk_end)
 		chunk_start = chunk_end
+		if build_progress.is_valid():
+			build_progress.call(float(chunk_end) / float(row_s.size() - 1))
 	_rebuild_bank_decals()
 	_dirty = false
 	_apply_style()
