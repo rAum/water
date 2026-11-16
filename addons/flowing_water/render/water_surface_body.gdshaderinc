@@ -402,7 +402,7 @@ void fragment() {
 	// more coverage to keep the same amount of white on the water
 #define BUB_COVER(cv) min((cv) * 1.45, 1.0)
 	FoamBubbles fbub;
-	bub_w = 1.0 - smoothstep(10.0, 22.0, length(v_world - (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz));
+	bub_w = 1.0 - smoothstep(16.0, 32.0, length(v_world - (INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).xyz));
 	// three more reads: only where foam can show (white water, the plunge,
 	// a pond's shore and drifting inflow foam, a river running into still water)
 	bool can_foam = mask > 0.03 || v_plunge > 0.001
@@ -416,7 +416,7 @@ void fragment() {
 		// on still water foam lives long and drifts slowly: a slow cycle
 		// (one period for the whole body, so phases never shear apart)
 		float bub_period = lake ? 4.0 : 0.9;
-		fbub = foam_bubbles(v_metric, flow_m / st, 1.0 / (0.8 * max(s_foam_tile, 0.25)), bub_period, jit + 0.15, TIME);
+		fbub = foam_bubbles(v_metric, flow_m / st, 1.0 / (2.0 * max(s_foam_tile, 0.25)), bub_period, jit + 0.15, TIME);
 		// the bubbles draw the edge now: keep it crisp
 		foam_soft = mix(s_foam_soft, 0.04, bub_w);
 	}
@@ -972,7 +972,7 @@ void fragment() {
 		vec3 sheet_col = s_foam_color * mix(vec3(1.0), water_hue, tint_k * mix(0.75, 0.25, sheet_d)) * mix(0.52, 0.88, sheet_d);
 		sheet_col *= mix(1.0, 0.8, lower);
 #if defined(FOAM_BUBBLES) && !defined(STYLIZED)
-		foam_col *= mix(1.0, clamp((bub.g - 0.86) * 1.8 + 0.94, 0.45, 1.06), bub_w);
+		foam_col *= mix(1.0, clamp((bub.g - 0.86) * 3.0 + 0.96, 0.4, 1.06), bub_w);
 #endif
 		foam_col = mix(foam_col, sheet_col, fall_amt);
 		foam_a = mix(foam_a, fall_white * 0.97, fall_amt);
